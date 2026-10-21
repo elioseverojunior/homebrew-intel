@@ -1,0 +1,10 @@
+.cache/
+.remember/
+__pycache__/
+
+# Shared Claude Code config, overriding the global gitignore
+!CLAUDE.md
+!.claude/skills/
+
+# Personal: lists the owner's Brewfile path and every installed package
+reports/brewfile.*

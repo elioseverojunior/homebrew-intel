@@ -1,0 +1,75 @@
+[
+ {
+  "installed": false,
+  "item": "anomalyco/tap/hex",
+  "kind": "casks",
+  "reasons": [
+   "depends_on arch: :arm64"
+  ],
+  "tap": "anomalyco/tap"
+ },
+ {
+  "installed": false,
+  "item": "aws/tap/cbmc-starter-kit",
+  "kind": "formulae",
+  "reasons": [
+   "bottles only for ARM/Linux: arm64_sonoma, x86_64_linux"
+  ],
+  "tap": "aws/tap"
+ },
+ {
+  "installed": false,
+  "item": "aws/tap/cbmc-viewer",
+  "kind": "formulae",
+  "reasons": [
+   "bottles only for ARM/Linux: arm64_sonoma, x86_64_linux"
+  ],
+  "tap": "aws/tap"
+ },
+ {
+  "item": "blendle/blendle/bnl",
+  "kind": "formulae",
+  "reasons": [
+   "fails to load: Error: undefined method 'undent' for an instance of String"
+  ],
+  "tap": "blendle/blendle"
+ },
+ {
+  "installed": false,
+  "item": "goreleaser/tap/goreleaser-pro@2",
+  "kind": "formulae",
+  "reasons": [
+   "disabled: the cask should be used now instead"
+  ],
+  "tap": "goreleaser/tap"
+ },
+ {
+  "installed": false,
+  "item": "slp/krunkit/krunkit",
+  "kind": "formulae",
+  "reasons": [
+   "depends_on arch: :arm64",
+   "bottles only for ARM/Linux: arm64_sequoia"
+  ],
+  "tap": "slp/krunkit"
+ },
+ {
+  "installed": false,
+  "item": "slp/krunkit/libkrun-efi",
+  "kind": "formulae",
+  "reasons": [
+   "depends_on arch: :arm64",
+   "bottles only for ARM/Linux: arm64_sequoia"
+  ],
+  "tap": "slp/krunkit"
+ },
+ {
+  "installed": false,
+  "item": "slp/krunkit/virglrenderer",
+  "kind": "formulae",
+  "reasons": [
+   "bottles only for ARM/Linux: arm64_sequoia"
+  ],
+  "tap": "slp/krunkit"
+ }
+]

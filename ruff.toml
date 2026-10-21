@@ -1,0 +1,17 @@
+# Audit scripts are stdlib-only CLI tools; select everything and opt out only
+# of rules that conflict with that (printing, calling brew, no package layout).
+line-length = 120
+target-version = "py312"
+
+[lint]
+select = ["ALL"]
+ignore = [
+  "COM812", # conflicts with the formatter
+  "CPY001", # no per-file copyright headers in this repo
+  "D",      # docstrings only where they explain something
+  "ANN",    # untyped scripts
+  "INP001", # scripts/audit is a script directory, not a package
+  "S603",   # subprocess calls run brew/git with fixed argument lists
+  "S607",   # brew and git are resolved from PATH on purpose
+  "T201",   # CLI output
+]
