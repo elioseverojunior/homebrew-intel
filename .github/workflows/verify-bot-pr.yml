@@ -1,0 +1,48 @@
+name: verify-bot-pr
+
+# The gate the main ruleset requires before a pull request merges; the
+# builder's auto-merge hinges on it. pull_request_target runs this file and the
+# checker as they are on the base branch, so a pull request cannot rewrite the
+# check that judges it. Never check out, build or run the pull request's code
+# here: the job only reads its metadata through the API.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  verify-bot-pr:
+    runs-on: ubuntu-latest
+    steps:
+      # Under pull_request_target the default checkout is the base branch.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Verify a bot bottle pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -Eeuo pipefail
+          if [[ ! "${PR_NUMBER}" =~ ^[0-9]+$ || ! "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "unexpected pull request number or head sha" >&2
+            exit 1
+          fi
+          pulls="repos/${REPOSITORY}/pulls/${PR_NUMBER}"
+          gh api --paginate "${pulls}/commits" > "${RUNNER_TEMP}/commits.json"
+          gh api --paginate "${pulls}/files" > "${RUNNER_TEMP}/files.json"
+          gh api --paginate "repos/${REPOSITORY}/commits/${HEAD_SHA}/check-runs?check_name=bottle-builder" \
+            --jq .check_runs > "${RUNNER_TEMP}/check-runs.json"
+          python3 scripts/ci/verify_bot_pr.py --event "${GITHUB_EVENT_PATH}" \
+            --commits "${RUNNER_TEMP}/commits.json" --files "${RUNNER_TEMP}/files.json" \
+            --check-runs "${RUNNER_TEMP}/check-runs.json"

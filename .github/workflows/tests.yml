@@ -67,33 +67,6 @@ jobs:
         env:
           HOMEBREW_CORE_REPO: core
 
-  # Required by the main ruleset; auto-merge of the builder's PRs hinges on it.
-  # Human PRs pass with "skipped" and still need the owner to merge them.
-  verify-bot-pr:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: read
-    steps:
-      # The base commit's checker, so a PR cannot rewrite the check it is judged by.
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          persist-credentials: false
-      - name: Verify a bot bottle pull request
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          set -Eeuo pipefail
-          api="repos/${REPOSITORY}/pulls/${PR_NUMBER}"
-          gh api --paginate "${api}/commits" > "${RUNNER_TEMP}/commits.json"
-          gh api --paginate "${api}/files" > "${RUNNER_TEMP}/files.json"
-          python3 scripts/ci/verify_bot_pr.py --event "${GITHUB_EVENT_PATH}" \
-            --commits "${RUNNER_TEMP}/commits.json" --files "${RUNNER_TEMP}/files.json"
-
   pour-test:
     if: github.event_name == 'pull_request'
     needs: [tap-syntax, drift]

@@ -10,15 +10,18 @@ import verify_bot_pr
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "ci" / "verify_bot_pr.py"
 REPO = "elioseverojunior/homebrew-intel"
+HEAD_SHA = "5646363e5d4fc69def7c6ccad23a44a34e9e12a7"
 # Trimmed from the live bot pull request #1 (gh api repos/.../pulls/1, /commits, /files).
 PULL_REQUEST = {
     "number": 1,
     "user": {"login": "elios-automator[bot]", "type": "Bot"},
-    "head": {"ref": "bottle/2026-10-22-2", "repo": {"full_name": REPO}},
+    "head": {"ref": "bottle/2026-10-22-2", "sha": HEAD_SHA, "repo": {"full_name": REPO}},
     "base": {"ref": "main", "repo": {"full_name": REPO}},
+    "commits": 1,
+    "changed_files": 1,
 }
 COMMIT = {
-    "sha": "5646363e5d4fc69def7c6ccad23a44a34e9e12a7",
+    "sha": HEAD_SHA,
     "author": {"login": "elios-automator[bot]", "type": "Bot"},
     "committer": {"login": "web-flow", "type": "User"},
     "commit": {
@@ -27,6 +30,15 @@ COMMIT = {
     },
 }
 FILE = {"filename": "Formula/l/lz4.rb", "status": "modified"}
+# Shape of GET repos/{repo}/commits/{sha}/check-runs .check_runs[], trimmed.
+CHECK_RUN = {
+    "name": "bottle-builder",
+    "head_sha": HEAD_SHA,
+    "status": "completed",
+    "conclusion": "success",
+    "app": {"slug": "elios-automator"},
+}
+NO_CHECK = "head 5646363e5d4f has no successful bottle-builder check run from elios-automator"
 
 
 class ProblemsTest(unittest.TestCase):
@@ -34,9 +46,11 @@ class ProblemsTest(unittest.TestCase):
         self.pull_request = copy.deepcopy(PULL_REQUEST)
         self.commits = [copy.deepcopy(COMMIT)]
         self.files = [copy.deepcopy(FILE)]
+        self.check_runs = [copy.deepcopy(CHECK_RUN)]
 
     def problems(self) -> list[str]:
-        return verify_bot_pr.problems(self.pull_request, self.commits, self.files)
+        evidence = verify_bot_pr.Evidence(self.commits, self.files, self.check_runs)
+        return verify_bot_pr.problems(self.pull_request, evidence)
 
     def test_live_bot_pull_request_passes(self):
         self.assertEqual(self.problems(), [])
@@ -70,6 +84,7 @@ class ProblemsTest(unittest.TestCase):
 
     def test_commit_by_another_author_fails(self):
         self.commits.append(copy.deepcopy(COMMIT) | {"sha": "a" * 40, "author": {"login": "elioseverojunior"}})
+        self.pull_request["commits"] = 2
         expected = "commit aaaaaaaaaaaa author is 'elioseverojunior', not elios-automator[bot]"
         self.assertEqual(self.problems(), [expected])
 
@@ -84,12 +99,53 @@ class ProblemsTest(unittest.TestCase):
         self.commits[0]["committer"] = {"login": "elios-automator[bot]"}
         self.assertIn("commit 5646363e5d4f committer is 'elios-automator[bot]', not web-flow", self.problems())
 
+    def test_forged_commit_without_the_check_run_fails(self):
+        # Verified, bot-authored, committed by web-flow: forgeable through the REST git API.
+        self.check_runs = []
+        self.assertEqual(self.problems(), [NO_CHECK])
+
+    def test_check_run_from_another_app_fails(self):
+        self.check_runs[0]["app"] = {"slug": "github-actions"}
+        self.assertEqual(self.problems(), [NO_CHECK])
+
+    def test_check_run_on_another_commit_fails(self):
+        self.check_runs[0]["head_sha"] = "b" * 40
+        self.assertEqual(self.problems(), [NO_CHECK])
+
+    def test_unsuccessful_or_misnamed_check_run_fails(self):
+        for change in ({"conclusion": "failure"}, {"name": "bottle-builder-2"}, {"app": None}):
+            with self.subTest(change=change):
+                self.check_runs = [CHECK_RUN | change]
+                self.assertEqual(self.problems(), [NO_CHECK])
+
+    def test_one_matching_check_run_among_others_passes(self):
+        self.check_runs.insert(0, CHECK_RUN | {"app": {"slug": "github-actions"}})
+        self.assertEqual(self.problems(), [])
+
+    def test_commit_count_mismatch_fails(self):
+        self.pull_request["commits"] = 2
+        self.assertEqual(self.problems(), ["fetched 1 commits, but the pull request has 2"])
+
+    def test_file_count_mismatch_fails(self):
+        self.pull_request["changed_files"] = 3
+        self.assertEqual(self.problems(), ["fetched 1 files, but the pull request has 3"])
+
+    def test_counts_at_the_api_limits_fail(self):
+        self.pull_request |= {"commits": 250, "changed_files": 3000}
+        self.commits *= 250
+        self.files *= 3000
+        problems = self.problems()
+        self.assertIn("250 commits reach the API listing limit of 250", problems)
+        self.assertIn("3000 files reach the API listing limit of 3000", problems)
+
     def test_no_commits_fails(self):
         self.commits = []
+        self.pull_request["commits"] = 0
         self.assertIn("pull request has no commits", self.problems())
 
     def test_file_outside_formula_fails(self):
         self.files.append({"filename": ".github/workflows/tests.yml", "status": "modified"})
+        self.pull_request["changed_files"] = 2
         self.assertEqual(self.problems(), ["file '.github/workflows/tests.yml' is outside Formula/"])
 
     def test_rename_from_outside_formula_fails(self):
@@ -98,6 +154,7 @@ class ProblemsTest(unittest.TestCase):
 
     def test_no_files_fails(self):
         self.files = []
+        self.pull_request["changed_files"] = 0
         self.assertIn("pull request changes no files", self.problems())
 
 
@@ -116,29 +173,32 @@ class CommandLineTest(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
 
-    def run_cli(self, pull_request: dict, commits: list, files: list) -> subprocess.CompletedProcess:
-        paths = {}
-        for name, document in (("event", {"pull_request": pull_request}), ("commits", commits), ("files", files)):
-            paths[name] = self.root / f"{name}.json"
-            paths[name].write_text(json.dumps(document), encoding="utf-8")
-        argv = [sys.executable, str(SCRIPT), "--event", str(paths["event"])]
-        argv += ["--commits", str(paths["commits"]), "--files", str(paths["files"])]
+    def run_cli(self, pull_request: dict, *pages: list) -> subprocess.CompletedProcess:
+        argv = [sys.executable, str(SCRIPT)]
+        documents = zip(
+            ("event", "commits", "files", "check-runs"), ({"pull_request": pull_request}, *pages), strict=True
+        )
+        for name, document in documents:
+            path = self.root / f"{name}.json"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            argv += [f"--{name}", str(path)]
         return subprocess.run(argv, capture_output=True, text=True, check=False)
 
     def test_verified_bot_pull_request_exits_zero(self):
-        result = self.run_cli(PULL_REQUEST, [COMMIT], [FILE])
+        result = self.run_cli(PULL_REQUEST, [COMMIT], [FILE], [CHECK_RUN])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("pull request #1 is a verified bot bottle PR (1 commits, 1 files)", result.stdout)
 
     def test_human_pull_request_is_skipped(self):
         human = PULL_REQUEST | {"user": {"login": "elioseverojunior", "type": "User"}}
-        result = self.run_cli(human, [], [{"filename": "README.md"}])
+        result = self.run_cli(human, [], [{"filename": "README.md"}], [])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("not a bot PR — skipped", result.stdout)
 
     def test_failing_bot_pull_request_lists_every_problem(self):
-        result = self.run_cli(PULL_REQUEST, [], [{"filename": "README.md"}])
+        result = self.run_cli(PULL_REQUEST, [], [{"filename": "README.md"}], [])
         self.assertEqual(result.returncode, 1)
+        self.assertIn(NO_CHECK, result.stderr)
         self.assertIn("pull request has no commits", result.stderr)
         self.assertIn("file 'README.md' is outside Formula/", result.stderr)
 

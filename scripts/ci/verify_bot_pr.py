@@ -1,14 +1,21 @@
 """Decide whether a pull request is a verified bot bottle PR that may auto-merge.
 
 A bot PR passes only when it comes from the builder's GitHub App on a
-same-repository `bottle/<YYYY-MM-DD>-<run>` branch, every commit is verified
-and was made through the API (author the bot, committer web-flow), and it only
-touches `Formula/`. Pull requests by anyone else are skipped with exit 0: they
-still need the owner to merge, since only the builder enables auto-merge.
+same-repository `bottle/<YYYY-MM-DD>-<run>` branch and its head commit carries
+a successful `bottle-builder` check run created by that App. The check run is
+the trust anchor: commit author, committer and verification can be forged by
+anyone with write access, but only the App can create its own check runs, and
+any later push moves the head to a commit without one. The commit checks stay
+as an extra layer. The PR must only touch `Formula/`, and the fetched commit
+and file lists must match the event's counts (and stay below the API listing
+limits) so a truncated listing cannot pass. Pull requests by anyone else are
+skipped with exit 0: they still need the owner to merge, since only the
+builder enables auto-merge.
 
-Usage: verify_bot_pr.py --event EVENT_JSON --commits COMMITS --files FILES,
-where COMMITS and FILES are the raw output of `gh api --paginate` (one JSON
-array per page, concatenated).
+Usage: verify_bot_pr.py --event EVENT_JSON --commits COMMITS --files FILES
+--check-runs CHECK_RUNS, where the last three are the output of
+`gh api --paginate` (one JSON array per page, concatenated; check runs as
+`--jq .check_runs`).
 """
 
 import argparse
@@ -17,11 +24,25 @@ import re
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import NamedTuple
 
 BOT_LOGIN = "elios-automator[bot]"
+APP_SLUG = "elios-automator"
+CHECK_NAME = "bottle-builder"
+# GitHub lists at most this many commits / files of a pull request.
+COMMIT_LIMIT = 250
+FILE_LIMIT = 3000
 COMMITTER_LOGIN = "web-flow"
 FORMULA_DIRECTORY = "Formula/"
 BRANCH_PATTERN = re.compile(r"bottle/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]+")
+
+
+class Evidence(NamedTuple):
+    """What the GitHub API returned for the pull request."""
+
+    commits: Sequence[Mapping]
+    files: Sequence[Mapping]
+    check_runs: Sequence[Mapping]
 
 
 def _login(user: Mapping | None) -> str | None:
@@ -66,16 +87,43 @@ def _file_problems(changed: Mapping) -> list[str]:
     return [f"file '{path}' is outside {FORMULA_DIRECTORY}" for path in outside]
 
 
-def problems(pull_request: Mapping, commits: Sequence[Mapping], files: Sequence[Mapping]) -> list[str]:
+def _built_by_the_app(check_run: Mapping, head_sha: str) -> bool:
+    return (
+        check_run.get("name") == CHECK_NAME
+        and (check_run.get("app") or {}).get("slug") == APP_SLUG
+        and check_run.get("conclusion") == "success"
+        and check_run.get("head_sha") == head_sha
+    )
+
+
+def _anchor_problems(pull_request: Mapping, check_runs: Sequence[Mapping]) -> list[str]:
+    head_sha = pull_request["head"]["sha"]
+    if any(_built_by_the_app(check_run, head_sha) for check_run in check_runs):
+        return []
+    return [f"head {head_sha[:12]} has no successful {CHECK_NAME} check run from {APP_SLUG}"]
+
+
+def _count_problems(kind: str, fetched: int, expected: int, limit: int) -> list[str]:
+    problems = []
+    if fetched != expected:
+        problems.append(f"fetched {fetched} {kind}, but the pull request has {expected}")
+    if fetched >= limit:
+        problems.append(f"{fetched} {kind} reach the API listing limit of {limit}")
+    return problems
+
+
+def problems(pull_request: Mapping, evidence: Evidence) -> list[str]:
     """Every reason the bot pull request must not auto-merge; empty when it may."""
-    found = _origin_problems(pull_request)
-    if not commits:
+    found = _origin_problems(pull_request) + _anchor_problems(pull_request, evidence.check_runs)
+    found += _count_problems("commits", len(evidence.commits), pull_request["commits"], COMMIT_LIMIT)
+    found += _count_problems("files", len(evidence.files), pull_request["changed_files"], FILE_LIMIT)
+    if not evidence.commits:
         found.append("pull request has no commits")
-    if not files:
+    if not evidence.files:
         found.append("pull request changes no files")
-    for commit in commits:
+    for commit in evidence.commits:
         found += _commit_problems(commit)
-    for changed in files:
+    for changed in evidence.files:
         found += _file_problems(changed)
     return found
 
@@ -92,7 +140,7 @@ def load_pages(text: str) -> list:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    for option in ("--event", "--commits", "--files"):
+    for option in ("--event", "--commits", "--files", "--check-runs"):
         parser.add_argument(option, type=Path, required=True)
     args = parser.parse_args(argv)
     pull_request = json.loads(args.event.read_text(encoding="utf-8"))["pull_request"]
@@ -100,15 +148,16 @@ def main(argv: list[str] | None = None) -> int:
     if not is_bot_pr(pull_request):
         print(f"pull request #{number} is not a bot PR — skipped")
         return 0
-    commits = load_pages(args.commits.read_text(encoding="utf-8"))
-    files = load_pages(args.files.read_text(encoding="utf-8"))
-    found = problems(pull_request, commits, files)
+    pages = (load_pages(path.read_text(encoding="utf-8")) for path in (args.commits, args.files, args.check_runs))
+    evidence = Evidence(*pages)
+    found = problems(pull_request, evidence)
     for problem in found:
         print(f"verify-bot-pr: {problem}", file=sys.stderr)
     if found:
         print(f"pull request #{number} must not auto-merge", file=sys.stderr)
         return 1
-    print(f"pull request #{number} is a verified bot bottle PR ({len(commits)} commits, {len(files)} files)")
+    counts = f"{len(evidence.commits)} commits, {len(evidence.files)} files"
+    print(f"pull request #{number} is a verified bot bottle PR ({counts})")
     return 0
 
 
