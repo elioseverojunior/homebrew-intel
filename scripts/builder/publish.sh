@@ -10,11 +10,14 @@ set -Eeuo pipefail
 # issues in the private repository; skipped with a warning when unset),
 # GITHUB_RUN_NUMBER, TAP_DIR (the checkout; default this script's repository).
 # Places each formula into the checkout, commits the render-only formulae, then
-# for each bottle uploads the release asset (--clobber when the release exists)
-# and commits the formula, every commit chained on the run's previous one
-# (commit-formula.sh). Opens the pull request on the run's last commit
-# (open-pr.sh) and one issue per failed build. Exits non-zero when anything
-# failed or was not published.
+# for each bottle uploads the release asset and commits the formula, every
+# commit chained on the run's previous one (commit-formula.sh), the first on
+# the manifest's tap_sha (the commit verify_artifact.py checked). An asset is
+# never overwritten: one already on the release is kept only when its digest is
+# the tarball's, and two formulae claiming one asset name are both refused.
+# Opens the pull request on the run's last commit (open-pr.sh) and one issue
+# per failed build (issue_body.py). Exits non-zero when anything failed or was
+# not published.
 
 readonly REPO="elioseverojunior/homebrew-intel"
 readonly PRIVATE_REPO="elioseverojunior/homebrew-intel-private"
@@ -72,14 +75,44 @@ commit_to_branch() {
   last_commit="${oid}"
 }
 
+# asset_digest <tag> <asset-name>: prints the asset's digest ("none" when
+# GitHub has none for it) or nothing when the release lacks the asset; fails
+# when the release cannot be read (e.g. it does not exist).
+asset_digest() {
+  gh release view "$1" -R "${REPO}" --json assets 2>/dev/null | python3 -c '
+import json, sys
+assets = json.load(sys.stdin)["assets"]
+print(*[asset.get("digest") or "none" for asset in assets if asset["name"] == sys.argv[1]][:1])
+' "$2"
+}
+
+file_digest() {
+  python3 -c 'import hashlib, sys; print("sha256:" + hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$1"
+}
+
+# Never --clobber: a release that already holds the asset keeps it, and the run
+# goes on only when that asset is byte for byte this bottle.
 upload_release() {
-  local name="$1" version="$2" asset="$3" tag="$1-$2"
-  if gh release view "${tag}" -R "${REPO}" >/dev/null 2>&1
+  local name="$1" version="$2" asset="$3" tag="$1-$2" listed digest
+  # shellcheck disable=SC2310 # an unreadable release is created; create refuses an existing one
+  if ! listed="$(asset_digest "${tag}" "${asset##*/}")"
   then
-    gh release upload "${tag}" "${asset}" --clobber -R "${REPO}"
-  else
     gh release create "${tag}" "${asset}" --title "${tag}" --notes "${name} ${version} Intel bottles" -R "${REPO}"
+    return
   fi
+  if [[ -z "${listed}" ]]
+  then
+    gh release upload "${tag}" "${asset}" -R "${REPO}"
+    return
+  fi
+  digest="$(file_digest "${asset}")"
+  if [[ "${listed}" = "${digest}" ]]
+  then
+    log "${tag} already has the identical ${asset##*/}; kept"
+    return 0
+  fi
+  log "refusing: ${tag} already has ${asset##*/} with another digest (${listed})"
+  return 1
 }
 
 publish_render_only() {
@@ -98,11 +131,17 @@ publish_render_only() {
 # A bottle's commit goes in only after its asset is up, so a merged block never
 # points at a missing release asset.
 publish_bottles() {
-  local name version relpath tarball rows
+  local name version relpath tarball rows claimed
   rows="$(manifest rows built)"
+  claimed="$(cut -f4 <<<"${rows}" | sort | uniq -d)"
   while IFS=$'\t' read -r name version relpath tarball _ <&3
   do
     [[ -n "${name}" ]] || continue
+    if [[ -n "${claimed}" ]] && grep -qxF "${tarball}" <<<"${claimed}"
+    then
+      record_unpublished "${name} ${version}: asset ${tarball} is claimed by another formula"
+      continue
+    fi
     place_formula "${relpath}"
     # shellcheck disable=SC2310 # a failed upload is recorded, the run goes on
     if ! upload_release "${name}" "${version}" "${out_dir}/bottles/${tarball}"
@@ -134,11 +173,7 @@ open_pull_request() {
 
 open_issue() {
   local name="$1" version="$2" body="${work_dir}/issue-$1.md"
-  {
-    printf 'Last 200 lines of the %s %s build log:\n\n```\n' "${name}" "${version}"
-    tail -n 200 "${out_dir}/logs/$3" 2>/dev/null || echo "(no log)"
-    printf '```\n'
-  } >"${body}"
+  python3 "${script_dir}/issue_body.py" "${out_dir}/logs" "$3" "${name}" "${version}" >"${body}"
   GH_TOKEN="${PRIVATE_GH_TOKEN}" gh issue create -R "${PRIVATE_REPO}" \
     --title "build failed: ${name} ${version}" --body-file "${body}" ||
     log "warning: could not open an issue for ${name}"
@@ -167,6 +202,8 @@ main() {
   mkdir -p "${work_dir}"
   branch="bottle/$(manifest field branch_date)-${GITHUB_RUN_NUMBER}"
   core_commit="$(manifest field core_commit)"
+  BASE_SHA="$(manifest field tap_sha)"
+  export BASE_SHA
   publish_render_only
   publish_bottles
   write_summary

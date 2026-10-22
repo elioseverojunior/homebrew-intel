@@ -13,14 +13,18 @@ PRIVATE_REPO = "elioseverojunior/homebrew-intel-private"
 BRANCH = "bottle/2026-10-22-42"
 CORE = "c" * 40
 TARBALL = "lz4-1.10.0.sequoia.bottle.tar.gz"
+TAP_SHA = "d" * 40
+NO_ASSETS = json.dumps({"assets": []})
 
 
-class PublishRunTest(unittest.TestCase):
+class PublishRunCase(unittest.TestCase):
+    """An artifact with two bottles and one render-only formula, and a fake GitHub."""
+
     def setUp(self):
         self.fake = self.enterContext(FakeBin())
         self.fake.serve_git("mainsha")
         self.out, self.tap = self.directory(), self.directory()
-        self.manifest = {"core_commit": CORE, "tap_sha": "d" * 40, "branch_date": "2026-10-22"}
+        self.manifest = {"core_commit": CORE, "tap_sha": TAP_SHA, "branch_date": "2026-10-22"}
         self.manifest |= {"built": [], "failed": [], "skipped": [], "render_only": []}
         self.add_built("lz4", "1.10.0")
         self.add_built("zstd", "1.5.6")
@@ -65,6 +69,8 @@ class PublishRunTest(unittest.TestCase):
     def calls(self, *prefix: str) -> list[dict]:
         return [call for call in self.fake.calls() if call["argv"][: len(prefix)] == list(prefix)]
 
+
+class PublishRunTest(PublishRunCase):
     def test_publishes_render_only_first_then_bottles_and_opens_the_pr(self):
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -72,7 +78,8 @@ class PublishRunTest(unittest.TestCase):
         headlines = [commit["message"]["headline"] for commit in commits]
         expected = ["xz: update from core ccccccc", "lz4: add 1.10.0 sequoia bottle", "zstd: add 1.5.6 sequoia bottle"]
         self.assertEqual(headlines, expected)
-        self.assertEqual([c["expectedHeadOid"] for c in commits], ["mainsha", fake_oid(1), fake_oid(2)])
+        self.assertEqual([c["expectedHeadOid"] for c in commits], [TAP_SHA, fake_oid(1), fake_oid(2)])
+        self.assertEqual(self.fake.git_state()["heads"]["main"], "mainsha", "main moved on; the branch did not")
         self.assertTrue(all(c["branch"]["branchName"] == BRANCH for c in commits))
         added = base64.b64decode(commits[1]["fileChanges"]["additions"][0]["contents"])
         self.assertEqual(added, b"lz4 bottled\n")
@@ -83,9 +90,10 @@ class PublishRunTest(unittest.TestCase):
         self.assertIn(f"head_sha={fake_oid(3)}", self.calls("gh", "api", f"repos/{REPO}/check-runs")[0]["argv"])
 
     def test_uploads_each_bottle_before_its_commit(self):
+        self.fake.respond("gh", "release", "view", "lz4-1.10.0", stdout=NO_ASSETS)
         self.fake.fail("gh", "release", "view", "zstd-1.5.6")
         self.assertEqual(self.run_script().returncode, 0)
-        upload = ["gh", "release", "upload", "lz4-1.10.0", str(self.out / "bottles" / TARBALL), "--clobber", "-R", REPO]
+        upload = ["gh", "release", "upload", "lz4-1.10.0", str(self.out / "bottles" / TARBALL), "-R", REPO]
         create = ["gh", "release", "create", "zstd-1.5.6", str(self.out / "bottles/zstd-1.5.6.sequoia.bottle.tar.gz")]
         create += ["--title", "zstd-1.5.6", "--notes", "zstd 1.5.6 Intel bottles", "-R", REPO]
         argvs = self.fake.argvs()
@@ -96,6 +104,7 @@ class PublishRunTest(unittest.TestCase):
         self.assertEqual({call["env"]["GH_TOKEN"] for call in self.calls("gh", "release")}, {"app-token"})
 
     def test_failed_upload_skips_that_commit_and_fails_the_run(self):
+        self.fake.respond("gh", "release", "view", "lz4-1.10.0", stdout=NO_ASSETS)
         self.fake.fail("gh", "release", "upload", "lz4-1.10.0")
         result = self.run_script()
         self.assertEqual(result.returncode, 1)
@@ -115,6 +124,7 @@ class PublishRunTest(unittest.TestCase):
         self.assertEqual(issue["env"]["GH_TOKEN"], "private-token")
         body = Path(issue["argv"][issue["argv"].index("--body-file") + 1]).read_text(encoding="utf-8")
         self.assertIn("error: z3 does not compile", body)
+        self.assertIn("```\n", body)
         self.assertEqual(len(self.calls("gh", "pr", "create")), 1)
 
     def test_issue_skipped_without_private_token(self):
@@ -138,7 +148,7 @@ class PublishRunTest(unittest.TestCase):
         self.fake.fail("gh", "release", "view", "lz4-1.10.0")
         self.fake.fail("gh", "release", "create", "lz4-1.10.0")
         self.assertEqual(self.run_script().returncode, 1)
-        self.assertEqual([c["expectedHeadOid"] for c in self.commits()], ["mainsha", fake_oid(1)])
+        self.assertEqual([c["expectedHeadOid"] for c in self.commits()], [TAP_SHA, fake_oid(1)])
 
     def test_open_pr_failure_fails_the_run(self):
         self.fake.fail("gh", "pr", "create")

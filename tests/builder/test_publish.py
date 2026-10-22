@@ -20,6 +20,7 @@ HEADLINE = "lz4: add 1.10.0 sequoia bottle"
 PR_URL = f"https://github.com/{REPO}/pull/9"
 EXPECTED = "e" * 40
 FOREIGN = "f" * 40
+BASE = "b" * 40
 CHECK_RUN = ["gh", "api", f"{API}check-runs", "-f", "name=bottle-builder", "-f", f"head_sha={EXPECTED}"]
 CHECK_RUN += ["-f", f"external_id={EXPECTED}"]
 CHECK_RUN += ["-f", "status=completed", "-f", "conclusion=success"]
@@ -38,7 +39,7 @@ class PublishTest(unittest.TestCase):
             (self.tap / relpath).write_text(text, encoding="utf-8")
 
     def run_script(self, script: str, *args: str, **extra: str) -> subprocess.CompletedProcess:
-        env = {**self.fake.environment(), "TAP_DIR": str(self.tap), "GH_TOKEN": "t", **extra}
+        env = {**self.fake.environment(), "TAP_DIR": str(self.tap), "GH_TOKEN": "t", "BASE_SHA": BASE, **extra}
         argv = ["bash", str(SCRIPTS / script), *args]
         return subprocess.run(argv, env=env, capture_output=True, text=True, check=False)
 
@@ -61,8 +62,23 @@ class CommitFormulaTest(PublishTest):
         self.assertEqual(self.commit("lz4").returncode, 0)
         self.assertEqual(self.commit("zstd", "zstd: 1.5", fake_oid(1)).returncode, 0)
         creates = [argv for argv in self.fake.argvs() if argv[:3] == ["gh", "api", f"{API}git/refs"]]
-        expected = ["gh", "api", f"{API}git/refs", "-f", f"ref=refs/heads/{BRANCH}", "-f", "sha=abc123"]
+        expected = ["gh", "api", f"{API}git/refs", "-f", f"ref=refs/heads/{BRANCH}", "-f", f"sha={BASE}"]
         self.assertEqual(creates, [expected])
+
+    def test_branch_starts_at_the_run_base_not_mains_head(self):
+        self.fake.serve_git("abc123")
+        result = self.commit("lz4")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn(["gh", "api", f"{API}git/ref/heads/main"], [argv[:3] for argv in self.fake.argvs()])
+        self.assertIn(f"creating {BRANCH} from the run's base {BASE}", result.stderr)
+
+    def test_first_commit_needs_a_valid_base(self):
+        self.fake.serve_git("abc123")
+        for base in ("", "main", "B" * 40):
+            with self.subTest(base=base):
+                result = self.run_script("commit-formula.sh", BRANCH, "lz4", HEADLINE, BASE_SHA=base)
+                self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(self.fake.argvs(), [])
 
     def test_commit_payload(self):
         self.fake.serve_git("abc123")
@@ -72,7 +88,7 @@ class CommitFormulaTest(PublishTest):
         self.assertIn("createCommitOnBranch", request["query"])
         change = request["variables"]["input"]
         self.assertEqual(change["branch"], {"repositoryNameWithOwner": REPO, "branchName": BRANCH})
-        self.assertEqual(change["expectedHeadOid"], "abc123")
+        self.assertEqual(change["expectedHeadOid"], BASE)
         self.assertEqual(change["message"], {"headline": HEADLINE})
         (addition,) = change["fileChanges"]["additions"]
         self.assertEqual(addition["path"], "Formula/l/lz4.rb")
@@ -90,7 +106,7 @@ class CommitFormulaTest(PublishTest):
         self.assertEqual(self.commit("lz4").returncode, 0)
         self.assertEqual(self.commit("zstd", "zstd: add 1.5 sequoia bottle", fake_oid(1)).returncode, 0)
         first, second = (request["variables"]["input"] for request in self.mutations())
-        self.assertEqual(first["expectedHeadOid"], "abc123")
+        self.assertEqual(first["expectedHeadOid"], BASE)
         self.assertEqual(second["expectedHeadOid"], fake_oid(1))
         self.assertEqual(second["fileChanges"]["additions"][0]["path"], "Formula/z/zstd.rb")
 
