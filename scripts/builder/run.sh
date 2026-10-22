@@ -5,35 +5,38 @@ set -Eeuo pipefail
 # Run one Intel bottle build on the self-hosted Mac, from the tap checkout:
 #   run.sh [--force NAME ...] [--dry-run]
 # Env: GH_TOKEN (App token), GITHUB_RUN_NUMBER, PRIVATE_GH_TOKEN (failure
-# issues; skipped with a warning when unset), BUILDER_CACHE (core clone, default
-# ~/Library/Caches/homebrew-intel-builder), BUILDER_LOG_DIR (default
-# <checkout>/.builder/logs).
+# issues; skipped with a warning when unset), BUILDER_CACHE (core clone and
+# run-state markers, default ~/Library/Caches/homebrew-intel-builder),
+# BUILDER_LOG_DIR (default <checkout>/.builder/logs).
 # Test seams: TAP_DIR (the checkout whose scripts run; default this script's
 # repository), TAPS_LINK (the Taps symlink), BUILDER_CORE_URL (core remote).
-# Steps: point the Taps symlink at the checkout (restored on every exit), fetch
-# the API, sync the core clone, render and commit changed formulae, build each
-# planned formula in order (skipping dependents of failures), open the PR.
+# Steps: reinstall a keg an interrupted build left uninstalled, point the Taps
+# symlink at the checkout (restored on every exit), fetch the API, sync the core
+# clone, render, plan, commit the changed formulae that need no bottle, build
+# each planned formula in order (skipping dependents of failures; its commit
+# carries the render too), open the PR.
 # --dry-run fetches the API and prints the plan; it changes nothing else.
 # Must stay compatible with macOS /bin/bash 3.2.
 
 readonly PRIVATE_REPO="elioseverojunior/homebrew-intel-private"
-readonly NAME_PATTERN='^[a-z0-9][a-z0-9@._+-]*$'
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly script_dir
+# shellcheck source=scripts/builder/keg.sh
+source "${script_dir}/keg.sh"
 TAP_DIR="${TAP_DIR:-$(cd "${script_dir}/../.." && pwd -P)}"
 export TAP_DIR
 readonly run_dir="${TAP_DIR}/.builder"
 readonly log_dir="${BUILDER_LOG_DIR:-${run_dir}/logs}"
-readonly cache_dir="${BUILDER_CACHE:-${HOME}/Library/Caches/homebrew-intel-builder}"
 readonly core_url="${BUILDER_CORE_URL:-https://github.com/Homebrew/homebrew-core}"
 # The Taps link's original target, kept while the link is swapped. A run killed
 # with SIGKILL cannot restore the link; the next run reads it back from here.
-readonly saved_target="${cache_dir}/taps-link-target"
+readonly saved_target="${builder_cache}/taps-link-target"
 
 dry_run=no
 force_args=()
 branch=""
 core_commit=""
+plan=""
 taps_link=""
 link_target=""
 # " name name " lists for membership tests (no associative arrays in bash 3.2).
@@ -96,29 +99,40 @@ restore_taps_link() {
   exit "${status}"
 }
 
+# Sets taps_link, the symlink brew resolves elioseverojunior/intel through.
+locate_taps_link() {
+  taps_link="${TAPS_LINK:-$(brew --repository)/Library/Taps/elioseverojunior/homebrew-intel}"
+}
+
+# True when the link already points at the checkout and no interrupted run
+# saved the original target: the owner's tap clone would be lost, so a real run
+# refuses.
+link_target_is_lost() {
+  [[ ! -f "${saved_target}" ]] &&
+    [[ "$(cd "${taps_link}" 2>/dev/null && pwd -P)" = "$(cd "${TAP_DIR}" && pwd -P)" ]]
+}
+
 # Sets link_target: the target saved by an interrupted run, else the link's
 # current one, saved atomically before the swap.
 record_link_target() {
+  if link_target_is_lost; then
+    log "refusing to start: ${taps_link} already points at ${TAP_DIR}; repoint it at your tap clone"
+    exit 1
+  fi
   if [[ -f "${saved_target}" ]]; then
     link_target="$(cat "${saved_target}")"
     log "recovering Taps link from a previous interrupted run (${link_target})"
     return 0
   fi
-  if [[ "$(cd "${taps_link}" 2>/dev/null && pwd -P)" = "$(cd "${TAP_DIR}" && pwd -P)" ]]; then
-    log "refusing to start: ${taps_link} already points at ${TAP_DIR}; repoint it at your tap clone"
-    exit 1
-  fi
   link_target="$(readlink "${taps_link}")"
-  mkdir -p "${cache_dir}"
-  printf '%s\n' "${link_target}" >"${saved_target}.tmp"
-  mv -f "${saved_target}.tmp" "${saved_target}"
+  write_atomically "${saved_target}" "${link_target}"
 }
 
 # brew resolves elioseverojunior/intel through this symlink, so it must point
 # at the checkout being built. A real directory there is the owner's tap clone;
 # refuse rather than replace it.
 swap_taps_link() {
-  taps_link="${TAPS_LINK:-$(brew --repository)/Library/Taps/elioseverojunior/homebrew-intel}"
+  locate_taps_link
   if [[ ! -L "${taps_link}" ]]; then
     log "refusing to start: ${taps_link} is not a symlink"
     exit 1
@@ -141,33 +155,94 @@ fetch_snapshot() {
   fi
 }
 
-sync_core_clone() {
-  local clone="${cache_dir}/homebrew-core"
-  if [[ -d "${clone}/.git" ]]; then
-    git -C "${clone}" fetch --quiet --filter=blob:none origin "${core_commit}"
-  else
-    mkdir -p "${cache_dir}"
-    git clone --quiet --filter=blob:none --no-checkout "${core_url}" "${clone}"
+# Reinstalls the keg an interrupted build left uninstalled (keg.sh), before
+# anything else; stops the run, Taps link untouched, when that fails.
+recover_pending_restore() {
+  [[ -f "${pending_restore}" ]] || return 0
+  local full_name
+  full_name="$(cat "${pending_restore}")"
+  log "reinstalling ${full_name}, left uninstalled by an interrupted build"
+  if [[ "${full_name}" =~ ^([a-z0-9-]+/[a-z0-9-]+/)?[a-z0-9][a-z0-9@._+-]*$ ]] &&
+    install_keg "${full_name}"; then
+    rm -f "${pending_restore}"
+    return 0
   fi
+  log "could not reinstall '${full_name}'; reinstall it by hand and delete ${pending_restore}"
+  exit 1
+}
+
+# brew bottle numbers a rebuild from origin/HEAD, which actions/checkout does
+# not create; without it a rebuild of an unchanged version would be rebuild 0
+# and clobber the live asset.
+set_origin_head() {
+  git -C "${TAP_DIR}" symbolic-ref -q refs/remotes/origin/HEAD >/dev/null && return 0
+  if ! git -C "${TAP_DIR}" rev-parse -q --verify refs/remotes/origin/main >/dev/null; then
+    log "warning: no origin/main in ${TAP_DIR}; bottle rebuild numbers may be wrong"
+    return 0
+  fi
+  git -C "${TAP_DIR}" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+}
+
+# A shallow, blobless fetch of just the run's core commit; render's `git show`
+# fetches the blobs it reads on demand from the promisor remote.
+sync_core_clone() {
+  local clone="${builder_cache}/homebrew-core"
+  if [[ ! -d "${clone}/.git" ]]; then
+    git init --quiet "${clone}"
+    git -C "${clone}" remote add origin "${core_url}"
+  fi
+  git -C "${clone}" fetch --quiet --depth=1 --filter=blob:none origin "${core_commit}"
   export HOMEBREW_CORE_REPO="${clone}"
 }
 
-# Commits every formula the render changed, so a render-only change still
-# reaches the branch when nothing needs a bottle. Deletions are left alone.
-render_and_commit() {
-  local changed line path
-  python3 "${TAP_DIR}/scripts/tap/render.py" --core-commit "${core_commit}"
-  changed="$(git -C "${TAP_DIR}" status --porcelain --untracked-files=all -- Formula)"
-  while IFS= read -r line <&3; do
+# Prints the Formula/*.rb paths the render added or modified (deletions are
+# left alone).
+changed_formulae() {
+  local line path
+  while IFS= read -r line; do
     path="${line:3}"
     [[ -n "${line}" && "${line:0:2}" != *D* && "${path}" == *.rb ]] || continue
-    "${TAP_DIR}/scripts/builder/commit-formula.sh" "${branch}" "$(basename "${path}" .rb)" \
-      "$(basename "${path}" .rb): update from core ${core_commit:0:7}"
-  done 3<<<"${changed}"
+    printf '%s\n' "${path}"
+  done <<<"$(git -C "${TAP_DIR}" status --porcelain --untracked-files=all -- Formula)"
+}
+
+# True when a tracked file differs from HEAD only in line 1, the generated
+# header naming the core commit.
+header_only_change() {
+  git -C "${TAP_DIR}" cat-file -e "HEAD:$1" 2>/dev/null || return 1
+  cmp -s <(git -C "${TAP_DIR}" show "HEAD:$1" | tail -n +2) <(tail -n +2 "${TAP_DIR}/$1")
+}
+
+# Renders, then plans. A header-only change is reverted. Other changes are
+# committed now only for formulae outside the plan: a planned formula's bottle
+# commit carries its render, so a failed version bump never lands.
+render_and_commit() {
+  local path name
+  python3 "${TAP_DIR}/scripts/tap/render.py" --core-commit "${core_commit}"
+  plan="$(planned_builds)"
+  while IFS= read -r path <&3; do
+    [[ -n "${path}" ]] || continue
+    name="$(basename "${path}" .rb)"
+    if header_only_change "${path}"; then
+      git -C "${TAP_DIR}" checkout --quiet -- "${path}"
+    elif ! planned "${name}"; then
+      "${TAP_DIR}/scripts/builder/commit-formula.sh" "${branch}" "${name}" \
+        "${name}: update from core ${core_commit:0:7}"
+    fi
+  done 3<<<"$(changed_formulae)"
 }
 
 planned_builds() {
   python3 "${TAP_DIR}/scripts/tap/plan.py" builds ${force_args[@]+"${force_args[@]}"}
+}
+
+# True when <name> starts a line of the plan.
+planned() {
+  local first rest
+  while read -r first rest; do
+    [[ "${first}" = "$1" ]] && return 0
+  done <<<"${plan}"
+  return 1
 }
 
 record_built() {
@@ -250,8 +325,7 @@ build_planned_formula() {
 }
 
 build_all() {
-  local plan fields
-  plan="$(planned_builds)"
+  local fields
   mkdir -p "${log_dir}"
   while read -r -a fields <&3; do
     [[ ${#fields[@]} -ge 2 ]] || continue
@@ -273,12 +347,16 @@ write_summary() {
 }
 
 print_dry_run() {
-  local plan
   fetch_snapshot
   plan="$(planned_builds)"
+  locate_taps_link
   echo "dry run: branch ${branch}, core commit ${core_commit}"
-  echo "would point ${TAPS_LINK:-the Taps symlink} at ${TAP_DIR} and sync ${cache_dir}/homebrew-core"
-  echo "would render at ${core_commit:0:7} and commit each changed formula"
+  if link_target_is_lost; then
+    echo "${taps_link} already points at ${TAP_DIR} and no target is saved: a real run would refuse"
+  fi
+  echo "would point ${taps_link} at ${TAP_DIR} and sync ${builder_cache}/homebrew-core"
+  echo "would render at ${core_commit:0:7}, revert header-only changes and commit each other"
+  echo "changed formula that is not planned (a planned one goes in with its bottle)"
   echo "plan (before render, so formulae the render changes may be missing):"
   echo "${plan:-  nothing to build}"
   echo "would build each in order, commit '<name>: add <version> sequoia bottle',"
@@ -299,7 +377,9 @@ main() {
     log "GH_TOKEN is required"
     exit 2
   fi
+  recover_pending_restore
   swap_taps_link
+  set_origin_head
   fetch_snapshot
   sync_core_clone
   render_and_commit
