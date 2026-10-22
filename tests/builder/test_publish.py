@@ -3,7 +3,6 @@ import json
 import subprocess
 import tempfile
 import unittest
-from datetime import UTC, datetime
 from pathlib import Path
 
 from tests.builder.fakes import FakeBin
@@ -12,6 +11,11 @@ SCRIPTS = Path(__file__).resolve().parents[2] / "scripts" / "builder"
 REPO = "elioseverojunior/homebrew-intel"
 BRANCH = "bottle/2026-10-22-7"
 API = f"repos/{REPO}/"
+UNAUTHORIZED = {
+    "stdout": '{"message":"Bad credentials","documentation_url":"https://docs.github.com/rest","status":"401"}',
+    "stderr": "gh: Bad credentials (HTTP 401)\n",
+    "exit_code": 1,
+}
 HEADLINE = "lz4: add 1.10.0 sequoia bottle"
 
 
@@ -75,6 +79,15 @@ class CommitFormulaTest(PublishTest):
         self.fake.fail("gh", "api", "graphql")
         self.assertNotEqual(self.commit().returncode, 0)
 
+    def test_non_404_ref_failure_aborts(self):
+        self.fake.serve_git("abc123")
+        self.fake.respond("gh", "api", f"{API}git/ref/heads/{BRANCH}", **UNAUTHORIZED)
+        result = self.commit()
+        self.assertNotEqual(result.returncode, 0)
+        called = [argv[2] for argv in self.fake.argvs()]
+        self.assertNotIn(f"{API}git/refs", called)
+        self.assertNotIn("graphql", called)
+
     def test_rejects_bad_arguments(self):
         bad = (("main", "lz4", HEADLINE), (BRANCH, "../lz4", HEADLINE), (BRANCH, "lz4", ""), (BRANCH, "nope", HEADLINE))
         for args in bad:
@@ -90,15 +103,17 @@ class OpenPullRequestTest(PublishTest):
         self.summary.write_text("Bottled lz4\n", encoding="utf-8")
 
     def open_pr(self) -> subprocess.CompletedProcess:
-        return self.run_script("open-pr.sh", BRANCH, str(self.summary), GITHUB_RUN_NUMBER="7")
+        return self.run_script("open-pr.sh", BRANCH, str(self.summary))
+
+    def created(self) -> list[list[str]]:
+        return [argv for argv in self.fake.argvs() if argv[:3] == ["gh", "pr", "create"]]
 
     def test_open_pr_args(self):
         self.fake.serve_git(branches={BRANCH: 2})
         result = self.open_pr()
         self.assertEqual(result.returncode, 0, result.stderr)
-        today = datetime.now(UTC).strftime("%Y-%m-%d")
         create = ["gh", "pr", "create", "-R", REPO, "--base", "main", "--head", BRANCH]
-        create += ["--title", f"bottles: {today} run 7", "--body-file", str(self.summary)]
+        create += ["--title", "bottles: 2026-10-22 run 7", "--body-file", str(self.summary)]
         self.assertEqual(self.fake.argvs()[-1], create)
 
     def test_open_pr_noop_without_commits(self):
@@ -108,10 +123,25 @@ class OpenPullRequestTest(PublishTest):
                 result = self.open_pr()
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn("nothing to open", result.stderr)
-                self.assertNotIn("create", [argv[2] for argv in self.fake.argvs() if argv[:2] == ["gh", "pr"]])
+                self.assertEqual(self.created(), [])
+
+    def test_non_404_compare_failure_aborts(self):
+        self.fake.serve_git(branches={BRANCH: 2})
+        self.fake.respond("gh", "api", f"{API}compare/main...{BRANCH}", **UNAUTHORIZED)
+        self.assertNotEqual(self.open_pr().returncode, 0)
+        self.assertEqual(self.created(), [])
+
+    def test_existing_open_pr_is_a_noop(self):
+        self.fake.serve_git(branches={BRANCH: 2})
+        list_prs = ["gh", "pr", "list", "-R", REPO, "--head", BRANCH, "--state", "open", "--json", "number"]
+        self.fake.respond(*list_prs, "--jq", "length", stdout="1\n")
+        result = self.open_pr()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("already open", result.stderr)
+        self.assertEqual(self.created(), [])
 
     def test_rejects_bad_arguments(self):
-        result = self.run_script("open-pr.sh", "main", str(self.summary), GITHUB_RUN_NUMBER="7")
+        result = self.run_script("open-pr.sh", "main", str(self.summary))
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.fake.argvs(), [])
 

@@ -29,6 +29,10 @@ import json, os, sys, time
 from pathlib import Path
 from urllib.parse import quote
 
+NOT_FOUND_BODY = (
+    '{{"message":"Not Found","documentation_url":"https://docs.github.com/rest/git/refs#get-a-reference",'
+    '"status":"404"}}'
+)
 REPO_API = "repos/elioseverojunior/homebrew-intel/"
 
 LOG, CONFIG = {log!r}, {config!r}
@@ -71,6 +75,8 @@ def serve_git():
         return
     state_file.write_text(json.dumps(state), encoding="utf-8")
     if sha is None:
+        # Real gh prints the raw error body to stdout (no newline) and a summary to stderr.
+        sys.stdout.write(NOT_FOUND_BODY)
         sys.stderr.write("gh: Not Found (HTTP 404)\\n")
         sys.exit(1)
     jq = args[args.index("--jq") + 1] if "--jq" in args else ""
@@ -94,6 +100,7 @@ if rule is None and config.get("serve_git") and tool == "gh":
 rule = rule or {{"stdout": "", "exit": 0, "sleep": 0}}
 time.sleep(rule["sleep"])
 sys.stdout.write(rule["stdout"])
+sys.stderr.write(rule.get("stderr", ""))
 with open(LOG, "a", encoding="utf-8") as log:
     log.write(json.dumps({{"done": call}}) + "\\n")
 sys.exit(rule["exit"])
@@ -138,8 +145,9 @@ class FakeBin:
     def git_state(self) -> dict:
         return json.loads((self.root / "git-state.json").read_text(encoding="utf-8"))
 
-    def respond(self, *argv: str, stdout: str = "", exit_code: int = 0, sleep: float = 0) -> None:
-        self.rules.append({"argv": list(argv), "stdout": stdout, "exit": exit_code, "sleep": sleep})
+    def respond(self, *argv: str, stdout: str = "", stderr: str = "", exit_code: int = 0, sleep: float = 0) -> None:
+        rule = {"argv": list(argv), "stdout": stdout, "stderr": stderr, "exit": exit_code, "sleep": sleep}
+        self.rules.append(rule)
         self._save()
 
     def fail(self, *argv: str) -> None:

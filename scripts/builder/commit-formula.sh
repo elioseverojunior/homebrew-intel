@@ -12,6 +12,8 @@ set -Eeuo pipefail
 readonly REPO="elioseverojunior/homebrew-intel"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly script_dir
+# shellcheck source=scripts/builder/gh-lookup.sh
+source "${script_dir}/gh-lookup.sh"
 
 log() {
   echo "commit-formula: $*" >&2
@@ -34,15 +36,7 @@ validate_arguments() {
 
 # Prints the branch head SHA; prints nothing when the branch does not exist.
 branch_head() {
-  local errors status=0
-  errors="$(mktemp)"
-  gh api "repos/${REPO}/git/ref/heads/$1" --jq .object.sha 2>"${errors}" || status=$?
-  if [[ "${status}" -ne 0 ]] && ! grep -q "Not Found" "${errors}"; then
-    cat "${errors}" >&2
-    rm -f "${errors}"
-    return "${status}"
-  fi
-  rm -f "${errors}"
+  gh_lookup "repos/${REPO}/git/ref/heads/$1" --jq .object.sha
 }
 
 create_branch() {
