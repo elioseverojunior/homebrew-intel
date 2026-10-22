@@ -2,7 +2,7 @@
 
 set -Eeuo pipefail
 
-# Build, test, bottle, upload and merge one tap formula on the Intel host:
+# Build, test, bottle, upload, merge and pour one tap formula on the Intel host:
 #   build-formula.sh <name> <pkg-version> <out-dir>
 # `brew install --build-bottle` has no reinstall form, so an installed keg is
 # uninstalled first. From then on, any failure or interruption removes the
@@ -169,6 +169,14 @@ upload_asset() {
   fi
 }
 
+# A keg built with --build-bottle keeps that option in its receipt, so a later
+# reinstall or upgrade would build from source. Swap it for a pour of the bottle
+# just merged and uploaded. Runs while a failure still triggers the restore.
+pour_new_bottle() {
+  brew uninstall --ignore-dependencies "${name}"
+  brew install --force-bottle "${TAP}/${name}"
+}
+
 main() {
   validate_arguments "$@"
   name="$1"
@@ -186,6 +194,7 @@ main() {
   make_bottle "${root_url}"
   upload_asset "${root_url##*/}" "${bottle_asset}"
   brew bottle --merge --write --no-commit "${bottle_json}"
+  pour_new_bottle
   log "bottled ${name} ${version}"
 }
 

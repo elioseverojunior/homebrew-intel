@@ -21,6 +21,7 @@ BUILD = ["brew", "install", "--build-bottle", f"{TAP}/lz4"]
 UNINSTALL = ["brew", "uninstall", "--ignore-dependencies", "lz4"]
 RESTORE_CORE = ["brew", "install", "lz4"]
 RESTORE_TAP = ["brew", "install", f"{TAP}/lz4"]
+POUR = ["brew", "install", "--force-bottle", f"{TAP}/lz4"]
 SAFEGUARDS = {
     "HOMEBREW_NO_AUTO_UPDATE": "1",
     "HOMEBREW_NO_INSTALL_CLEANUP": "1",
@@ -81,11 +82,30 @@ class BuildFormulaTest(unittest.TestCase):
                 ["gh", "release", "view", TAG, "-R", REPO],
                 ["gh", "release", "upload", TAG, str(self.out / ASSET), "--clobber", "-R", REPO],
                 merge,
+                UNINSTALL,
+                POUR,
             ],
         )
         self.assertEqual(self.fake.calls()[4]["cwd"], str(self.out))
         self.assertTrue((self.out / ASSET).is_file())
         self.assertFalse((self.out / "lz4--1.10.0.sequoia.bottle.tar.gz").exists())
+
+    def test_pour_failure_restores_previous_keg(self):
+        self.installed("homebrew/core")
+        self.fake.fail(*POUR)
+        result = self.run_script()
+        self.assertEqual(result.returncode, 1)
+        argvs = self.fake.argvs()
+        merge_at = next(i for i, argv in enumerate(argvs) if argv[:3] == ["brew", "bottle", "--merge"])
+        self.assertEqual(argvs[merge_at + 1 :], [UNINSTALL, POUR, UNINSTALL, RESTORE_CORE])
+        self.assertFalse(self.marker.exists())
+
+    def test_pour_failure_without_previous_keg_exits_non_zero(self):
+        self.fake.respond(*INFO, stdout=json.dumps({"formulae": [], "casks": []}))
+        self.fake.fail(*POUR)
+        result = self.run_script()
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(self.fake.argvs()[-3:], [UNINSTALL, POUR, UNINSTALL])
 
     def test_existing_release_uses_clobber(self):
         result = self.run_script()
