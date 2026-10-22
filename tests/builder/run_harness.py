@@ -1,26 +1,29 @@
 """Shared harness for run.sh tests: script stubs, a temp tap and core repo."""
 
-import hashlib
 import json
 import subprocess
 import sys
 import tempfile
 import unittest
-from datetime import UTC, datetime
 from pathlib import Path
 
 from tests.builder.fakes import FakeBin
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "builder" / "run.sh"
-PRIVATE_REPO = "elioseverojunior/homebrew-intel-private"
-STUBBED = ("scripts/audit/fetch-api.sh", "scripts/tap/plan.py", "scripts/tap/render.py")
-STUBBED += tuple(f"scripts/builder/{name}.sh" for name in ("build-formula", "commit-formula", "open-pr"))
+STUBBED = (
+    "scripts/audit/fetch-api.sh",
+    "scripts/tap/plan.py",
+    "scripts/tap/render.py",
+    "scripts/builder/build-formula.sh",
+)
 
 # One stub stands in for every script run.sh calls. Each call is logged with
 # where the Taps symlink pointed at that moment; stubs.json decides the plan,
-# the files render.py rewrites, and which builds fail or stall.
+# the files render.py rewrites, and which builds fail, stall or leave no bottle.
+# A successful build-formula.sh writes a bottle JSON and tarball into its
+# out-dir and rewrites the formula, the way `brew bottle --merge --write` does.
 STUB = """#!{python}
-import hashlib, json, os, sys, time
+import json, os, sys, time
 from pathlib import Path
 
 root = Path({root!r})
@@ -29,8 +32,18 @@ script, args = os.path.basename(sys.argv[0]), sys.argv[1:]
 link = root / "Taps" / "homebrew-intel"
 
 
-def oid(name):
-    return hashlib.sha1(name.encode()).hexdigest()
+def formula_relpath(name):
+    return f"Formula/{{'lib' if name.startswith('lib') else name[0]}}/{{name}}.rb"
+
+
+def write_bottle(name, version, out):
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / f"{{name}}--{{version}}.sequoia.bottle.json").write_text("{{}}", encoding="utf-8")
+    (out / f"{{name}}-{{version}}.sequoia.bottle.tar.gz").write_bytes(b"bottle")
+    formula = Path(os.environ["TAP_DIR"]) / formula_relpath(name)
+    formula.parent.mkdir(parents=True, exist_ok=True)
+    formula.write_text(f"bottled {{name}}\\n", encoding="utf-8")
 
 
 names = ("TAP_DIR", "HOMEBREW_INTEL_DATA", "HOMEBREW_CORE_REPO")
@@ -58,20 +71,9 @@ elif script == "build-formula.sh":
     if args[0] in config["fail"]:
         print(f"error: {{args[0]}} does not compile")
         sys.exit(1)
-elif script == "commit-formula.sh":
-    if args[1] in config.get("commit_fail", []):
-        print(f"error: cannot commit {{args[1]}}", file=sys.stderr)
-        sys.exit(1)
-    print(f"committed {{args[1]}}", file=sys.stderr)
-    print(oid(args[1]))
-elif script == "open-pr.sh" and config.get("open_pr_fail"):
-    sys.exit(1)
+    if args[0] not in config.get("no_bottle", []):
+        write_bottle(*args)
 """
-
-
-def commit_oid(name: str) -> str:
-    """The commit oid the commit-formula.sh stub prints for formula `name`."""
-    return hashlib.sha1(name.encode()).hexdigest()  # noqa: S324 - a fake oid, not security
 
 
 def git(*args: str) -> str:
@@ -107,7 +109,6 @@ class RunTest(unittest.TestCase):
         (self.root / "Taps").mkdir()
         self.link = self.root / "Taps" / "homebrew-intel"
         self.link.symlink_to(self.original)
-        self.branch = f"bottle/{datetime.now(UTC).strftime('%Y-%m-%d')}-42"
         self.configure(plan="")
 
     def write_stubs(self) -> None:
@@ -129,15 +130,17 @@ class RunTest(unittest.TestCase):
             "TAPS_LINK": str(self.link),
             "BUILDER_CACHE": str(self.root / "cache"),
             "BUILDER_CORE_URL": str(self.root / "core"),
-            "GITHUB_RUN_NUMBER": "42",
-            "GH_TOKEN": "app-token",
-            "PRIVATE_GH_TOKEN": "private-token",
         }
+        for secret in ("GH_TOKEN", "GITHUB_TOKEN", "PRIVATE_GH_TOKEN"):
+            env.pop(secret, None)
         return {**env, **extra}
 
-    def run_script(self, *args: str, **extra: str) -> subprocess.CompletedProcess:
+    def run_bare(self, *args: str, **extra: str) -> subprocess.CompletedProcess:
         argv = ["bash", str(SCRIPT), *args]
         return subprocess.run(argv, env=self.environment(**extra), capture_output=True, text=True, check=False)
+
+    def run_script(self, *args: str, **extra: str) -> subprocess.CompletedProcess:
+        return self.run_bare("--build-only", *args, **extra)
 
     def stub_calls(self, script: str | None = None) -> list[dict]:
         log = self.root / "stubs.jsonl"
@@ -150,8 +153,15 @@ class RunTest(unittest.TestCase):
     def built(self) -> list[str]:
         return [argv[0] for argv in self.stub_argvs("build-formula.sh")]
 
-    def issues(self) -> list[list[str]]:
-        return [argv for argv in self.fake.argvs() if argv[:3] == ["gh", "issue", "create"]]
+    @property
+    def out(self) -> Path:
+        return self.tap / ".builder" / "out"
+
+    def manifest(self) -> dict:
+        return json.loads((self.out / "manifest.json").read_text(encoding="utf-8"))
+
+    def section(self, name: str) -> list[str]:
+        return [entry["name"] for entry in self.manifest()[name]]
 
     @property
     def saved_target(self) -> Path:
@@ -159,6 +169,3 @@ class RunTest(unittest.TestCase):
 
     def assert_link_restored(self) -> None:
         self.assertEqual(self.link.readlink(), self.original)
-
-    def summary(self) -> str:
-        return (self.tap / ".builder" / "summary.md").read_text(encoding="utf-8")

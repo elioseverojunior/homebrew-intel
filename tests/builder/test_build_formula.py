@@ -11,9 +11,7 @@ from tests.builder.fakes import FakeBin
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "builder" / "build-formula.sh"
 TAP = "elioseverojunior/intel"
-REPO = "elioseverojunior/homebrew-intel"
-TAG = "lz4-1.10.0"
-ROOT_URL = f"https://github.com/{REPO}/releases/download/{TAG}"
+ROOT_URL = "https://github.com/elioseverojunior/homebrew-intel/releases/download/lz4-1.10.0"
 ASSET = "lz4-1.10.0.sequoia.bottle.tar.gz"
 BOTTLE_JSON = "lz4--1.10.0.sequoia.bottle.json"
 INFO = ["brew", "info", "--json=v2", "--installed", "lz4"]
@@ -21,7 +19,6 @@ BUILD = ["brew", "install", "--build-bottle", f"{TAP}/lz4"]
 UNINSTALL = ["brew", "uninstall", "--ignore-dependencies", "lz4"]
 RESTORE_CORE = ["brew", "install", "lz4"]
 RESTORE_TAP = ["brew", "install", f"{TAP}/lz4"]
-POUR = ["brew", "install", "--force-bottle", f"{TAP}/lz4"]
 SAFEGUARDS = {
     "HOMEBREW_NO_AUTO_UPDATE": "1",
     "HOMEBREW_NO_INSTALL_CLEANUP": "1",
@@ -66,11 +63,13 @@ class BuildFormulaTest(unittest.TestCase):
                 self.fail(f"{argv} was never called")
             time.sleep(0.05)
 
+    def merge(self) -> list[str]:
+        return ["brew", "bottle", "--merge", "--write", "--no-commit", str(self.out / BOTTLE_JSON)]
+
     def test_happy_path_call_order(self):
         self.installed("homebrew/core")
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stderr)
-        merge = ["brew", "bottle", "--merge", "--write", "--no-commit", str(self.out / BOTTLE_JSON)]
         self.assertEqual(
             self.fake.argvs(),
             [
@@ -79,47 +78,27 @@ class BuildFormulaTest(unittest.TestCase):
                 BUILD,
                 ["brew", "test", f"{TAP}/lz4"],
                 ["brew", "bottle", "--json", f"--root-url={ROOT_URL}", f"{TAP}/lz4"],
-                ["gh", "release", "view", TAG, "-R", REPO],
-                ["gh", "release", "upload", TAG, str(self.out / ASSET), "--clobber", "-R", REPO],
-                merge,
-                UNINSTALL,
-                POUR,
+                self.merge(),
             ],
         )
         self.assertEqual(self.fake.calls()[4]["cwd"], str(self.out))
         self.assertTrue((self.out / ASSET).is_file())
         self.assertFalse((self.out / "lz4--1.10.0.sequoia.bottle.tar.gz").exists())
-
-    def test_pour_failure_restores_previous_keg(self):
-        self.installed("homebrew/core")
-        self.fake.fail(*POUR)
-        result = self.run_script()
-        self.assertEqual(result.returncode, 1)
-        argvs = self.fake.argvs()
-        merge_at = next(i for i, argv in enumerate(argvs) if argv[:3] == ["brew", "bottle", "--merge"])
-        self.assertEqual(argvs[merge_at + 1 :], [UNINSTALL, POUR, UNINSTALL, RESTORE_CORE])
         self.assertFalse(self.marker.exists())
 
-    def test_pour_failure_without_previous_keg_exits_non_zero(self):
-        self.fake.respond(*INFO, stdout=json.dumps({"formulae": [], "casks": []}))
-        self.fake.fail(*POUR)
+    def test_never_calls_github(self):
+        self.fake.fail("gh")
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([argv for argv in self.fake.argvs() if argv[0] == "gh"], [])
+
+    def test_merge_failure_restores_tap_keg(self):
+        self.installed(TAP)
+        self.fake.fail("brew", "bottle", "--merge")
         result = self.run_script()
         self.assertEqual(result.returncode, 1)
-        self.assertEqual(self.fake.argvs()[-3:], [UNINSTALL, POUR, UNINSTALL])
-
-    def test_existing_release_uses_clobber(self):
-        result = self.run_script()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        gh_calls = [argv for argv in self.fake.argvs() if argv[0] == "gh"]
-        self.assertEqual(gh_calls[1], ["gh", "release", "upload", TAG, str(self.out / ASSET), "--clobber", "-R", REPO])
-
-    def test_missing_release_is_created(self):
-        self.fake.fail("gh", "release", "view")
-        result = self.run_script()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        create = ["gh", "release", "create", TAG, str(self.out / ASSET), "--title", TAG]
-        create += ["--notes", "lz4 1.10.0 Intel bottles", "-R", REPO]
-        self.assertEqual([argv for argv in self.fake.argvs() if argv[0] == "gh"][1], create)
+        self.assertEqual(self.fake.argvs()[-3:], [self.merge(), UNINSTALL, RESTORE_TAP])
+        self.assertFalse(self.marker.exists())
 
     def test_build_failure_restores_previous_keg(self):
         self.installed("homebrew/core")
@@ -129,13 +108,6 @@ class BuildFormulaTest(unittest.TestCase):
         argvs = self.fake.argvs()
         self.assertEqual(argvs[-2:], [UNINSTALL, RESTORE_CORE])
         self.assertNotIn(["brew", "test", f"{TAP}/lz4"], argvs)
-
-    def test_upload_failure_restores_tap_keg(self):
-        self.installed(TAP)
-        self.fake.fail("gh", "release", "upload")
-        result = self.run_script()
-        self.assertEqual(result.returncode, 1)
-        self.assertEqual(self.fake.argvs()[-2:], [UNINSTALL, RESTORE_TAP])
 
     def test_failed_tap_restore_falls_back_to_core(self):
         self.installed(TAP)
@@ -171,8 +143,7 @@ class BuildFormulaTest(unittest.TestCase):
     def test_versioned_name_asset_is_url_decoded(self):
         result = self.run_script("python@3.12", "3.12.7")
         self.assertEqual(result.returncode, 0, result.stderr)
-        upload = next(argv for argv in self.fake.argvs() if argv[:3] == ["gh", "release", "upload"])
-        self.assertEqual(upload[4], str(self.out / "python@3.12-3.12.7.sequoia.bottle.tar.gz"))
+        self.assertFalse((self.out / "python@3.12--3.12.7.sequoia.bottle.tar.gz").exists())
         self.assertTrue((self.out / "python@3.12-3.12.7.sequoia.bottle.tar.gz").is_file())
 
     def test_empty_installed_list_skips_uninstall(self):

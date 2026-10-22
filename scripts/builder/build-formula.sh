@@ -2,85 +2,30 @@
 
 set -Eeuo pipefail
 
-# Build, test, bottle, upload, merge and pour one tap formula on the Intel host:
+# Build, test and bottle one tap formula on the Intel host:
 #   build-formula.sh <name> <pkg-version> <out-dir>
-# `brew install --build-bottle` has no reinstall form, so an installed keg is
-# uninstalled first. From then on, any failure or interruption removes the
-# half-built keg and reinstalls the recorded one (same full name, core as a
-# fallback) before exiting non-zero, so /usr/local is never left without it.
-# A pending-restore marker (see keg.sh) covers a kill during that restore.
+# Leaves the bottle tarball (renamed to the bottle JSON's decoded filename) and
+# the bottle JSON in <out-dir>, and writes the bottle block into the checkout's
+# formula. It uploads nothing and needs no token: the hosted publish job does
+# that after verifying the output. The installed keg is swapped through
+# keg-swap.sh, so a failure or interruption reinstalls the previous one.
 # Must stay compatible with macOS /bin/bash 3.2.
 # The embedded Python never starts a line with `if`: brew style's shfmt
 # wrapper would take it for a shell `if` and reindent the snippet.
 
-readonly TAP="elioseverojunior/intel"
-readonly REPO="elioseverojunior/homebrew-intel"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly script_dir
 # shellcheck source=scripts/builder/keg.sh
 source "${script_dir}/keg.sh"
+# shellcheck source=scripts/builder/keg-swap.sh
+source "${script_dir}/keg-swap.sh"
 
-restore_name=""
-build_started=no
-bottle_json=""
-bottle_asset=""
+name=""
+version=""
+out_dir=""
 
 log() {
   echo "build-formula: $*" >&2
-}
-
-# Prints the installed keg's full name (<tap>/<name>, plain <name> for core),
-# or nothing when the formula is not installed.
-installed_full_name() {
-  local name="$1" info
-  info="$(brew info --json=v2 --installed "${name}" 2>/dev/null)" || return 0
-  python3 -c '
-import json, sys
-name = sys.argv[1]
-formulae = json.loads(sys.stdin.read().strip() or "{}").get("formulae") or []
-installed = [entry for entry in formulae if entry.get("name") == name and entry.get("installed")]
-for formula in installed:
-    tap = formula.get("tap") or "homebrew/core"
-    print(name if tap == "homebrew/core" else f"{tap}/{name}")
-' "${name}" <<<"${info}"
-}
-
-# EXIT trap. A cancelled Actions job sends SIGINT and then SIGTERM, so further
-# signals are ignored (brew inherits that) and errexit is off: the restore must
-# run to the end whatever happens.
-restore_previous_keg() {
-  local status=$?
-  trap '' INT TERM
-  set +e
-  trap - EXIT
-  if [[ "${status}" -eq 0 ]]
-  then
-    [[ -z "${restore_name}" ]] || rm -f "${pending_restore}"
-  else
-    log "failed (exit ${status})"
-    remove_half_built_keg
-    reinstall_recorded_keg
-  fi
-  exit "${status}"
-}
-
-remove_half_built_keg() {
-  [[ "${build_started}" = yes ]] || return 0
-  log "removing the half-built ${TAP}/${name}"
-  brew uninstall --ignore-dependencies "${name}"
-}
-
-# The marker stays when nothing could be reinstalled; the next run retries.
-reinstall_recorded_keg() {
-  [[ -n "${restore_name}" ]] || return 0
-  log "restoring ${restore_name}"
-  # shellcheck disable=SC2310 # runs in the EXIT trap after set +e; a failure is handled below
-  if install_keg "${restore_name}"
-  then
-    rm -f "${pending_restore}"
-    return 0
-  fi
-  log "could not restore ${restore_name}; reinstall it by hand"
 }
 
 validate_arguments() {
@@ -96,27 +41,8 @@ validate_arguments() {
   fi
 }
 
-# Uninstalls the installed keg, if any, after recording it for the restore
-# here and in the pending-restore marker. The marker holds one keg, so an
-# earlier keg whose restore failed blocks every build until it is back.
-uninstall_previous_keg() {
-  if [[ -f "${pending_restore}" ]]
-  then
-    # shellcheck disable=SC2312 # message only; exit 1 follows whatever cat returns
-    log "refusing to build: $(cat "${pending_restore}") is still uninstalled (${pending_restore})"
-    exit 1
-  fi
-  restore_name="$(installed_full_name "${name}")"
-  if [[ -n "${restore_name}" ]]
-  then
-    write_atomically "${pending_restore}" "${restore_name}"
-    log "uninstalling ${restore_name}; it is restored if the build fails"
-    brew uninstall --ignore-dependencies "${name}"
-  fi
-}
-
 build_and_test() {
-  build_started=yes
+  keg_touched=yes
   brew install --build-bottle "${TAP}/${name}"
   brew test "${TAP}/${name}"
 }
@@ -137,9 +63,8 @@ print(*names) if safe else sys.exit(f"unsafe bottle filename in {sys.argv[1]}")
 ' "$1"
 }
 
-# Writes the bottle into out_dir and renames the tarball to the JSON's filename.
-# Sets bottle_json and bottle_asset (globals: a command substitution would run
-# this in a subshell where errexit does not apply under bash 3.2).
+# Writes the bottle into out_dir, renames the tarball to the JSON's filename
+# and merges the bottle block into the formula.
 make_bottle() {
   local root_url="$1" matches pair local_file filename
   (cd "${out_dir}" && brew bottle --json --root-url="${root_url}" "${TAP}/${name}")
@@ -155,26 +80,7 @@ make_bottle() {
   then
     mv -f "${out_dir}/${local_file}" "${out_dir}/${filename}"
   fi
-  bottle_json="${matches}"
-  bottle_asset="${out_dir}/${filename}"
-}
-
-upload_asset() {
-  local tag="$1" asset="$2"
-  if gh release view "${tag}" -R "${REPO}" >/dev/null 2>&1
-  then
-    gh release upload "${tag}" "${asset}" --clobber -R "${REPO}"
-  else
-    gh release create "${tag}" "${asset}" --title "${tag}" --notes "${name} ${version} Intel bottles" -R "${REPO}"
-  fi
-}
-
-# A keg built with --build-bottle keeps that option in its receipt, so a later
-# reinstall or upgrade would build from source. Swap it for a pour of the bottle
-# just merged and uploaded. Runs while a failure still triggers the restore.
-pour_new_bottle() {
-  brew uninstall --ignore-dependencies "${name}"
-  brew install --force-bottle "${TAP}/${name}"
+  brew bottle --merge --write --no-commit "${matches}"
 }
 
 main() {
@@ -185,16 +91,9 @@ main() {
   out_dir="$(cd "$3" && pwd -P)"
   local root_url
   root_url="$(python3 "${script_dir}/../tap/bottles.py" root-url "${name}" "${version}")"
-
-  trap restore_previous_keg EXIT
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
-  uninstall_previous_keg
+  start_keg_swap "${name}"
   build_and_test
   make_bottle "${root_url}"
-  upload_asset "${root_url##*/}" "${bottle_asset}"
-  brew bottle --merge --write --no-commit "${bottle_json}"
-  pour_new_bottle
   log "bottled ${name} ${version}"
 }
 
