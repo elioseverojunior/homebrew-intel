@@ -31,6 +31,13 @@ class DriftTest(RenderTestCase):
         self.write(path, apply_bottle(self.read("Formula/l/llvm.rb"), TAP_BOTTLE))
         self.assertEqual(drift.check(self.tap, self.core), [])
 
+    def test_drift_flags_misplaced_file(self):
+        (self.tap / "Formula/l/llvm.rb").rename(self.tap / "Formula/llvm.rb")
+        problems = drift.check(self.tap, self.core)
+        misplaced = [problem for problem in problems if "Formula/l/llvm.rb" in problem]
+        self.assertEqual(len(misplaced), 1)
+        self.assertIn("Formula/llvm.rb", misplaced[0])
+
     def test_drift_flags_orphan_patch(self):
         self.write(self.tap / "patches/ghost.patch", "")
         problems = drift.check(self.tap, self.core)

@@ -6,7 +6,7 @@ import sys
 from collections.abc import Set as AbstractSet
 from pathlib import Path
 
-from core_source import core_repo, read_formula
+from core_source import core_repo, formula_relpath, read_formula
 from enabled import Entry, load_enabled
 from render import RENDER_ERRORS, TAP_ROOT, formula_files, patch_path, render_formula
 from transform import parse_header, strip_bottle_block
@@ -46,6 +46,9 @@ def check_formula(path: Path, tap_dir: Path, repo: Path, tap_names: AbstractSet[
         )
     except RENDER_ERRORS as error:
         return f"{relpath}: {error}"
+    expected_path = formula_relpath(path.stem)
+    if relpath != expected_path:
+        return f"{relpath}: misplaced formula, expected {expected_path}"
     actual = strip_bottle_block(text)
     if actual == expected:
         return None
