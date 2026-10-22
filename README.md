@@ -52,5 +52,6 @@ one day plus build time).
 
 ## License
 
-See the license of each upstream project; formulae keep their upstream
-`license` field.
+BSD 2-Clause, the same as Homebrew; see [LICENSE.txt](LICENSE.txt). Formulae
+are derived from homebrew-core, so its copyright notice is kept. Each formula's
+`license` field still describes the upstream software it installs.
