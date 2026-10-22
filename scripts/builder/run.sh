@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 # Build Intel bottles on the self-hosted Mac, with no secret in reach:
-#   run.sh --build-only [--force NAME ...] [--dry-run]
+#   run.sh --build-only [--core-commit SHA] [--force NAME ...] [--dry-run]
 # Writes what the hosted publish job needs to .builder/out (see manifest.py):
 # manifest.json, bottles and their JSON, rendered formulae and build logs. It
 # uploads, commits and pours nothing, and refuses a token in its environment.
@@ -17,6 +17,10 @@ set -Eeuo pipefail
 # each planned formula in order (skipping dependents of failures). A failed
 # formula is recorded, not fatal: the run fails only when it cannot run or the
 # plan names an invalid formula. --dry-run fetches the API and prints the plan.
+# --core-commit pins the run to the homebrew-core commit the hosted prepare job
+# resolved; without it the run uses the API snapshot's commit. When the API
+# snapshot names another commit, the pinned one wins for the core clone and the
+# render, and the difference is logged.
 # Must stay compatible with macOS /bin/bash 3.2.
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,6 +42,7 @@ build_only=no
 dry_run=no
 force_args=()
 core_commit=""
+pinned_core_commit=""
 plan=""
 # " name name " list for membership tests (no associative arrays in bash 3.2).
 unbuilt=" "
@@ -48,7 +53,7 @@ log() {
 }
 
 usage() {
-  log "usage: run.sh --build-only [--force NAME ...] [--dry-run]"
+  log "usage: run.sh --build-only [--core-commit SHA] [--force NAME ...] [--dry-run]"
   exit 2
 }
 
@@ -61,6 +66,11 @@ parse_arguments() {
       --force)
         [[ $# -ge 2 && "$2" =~ ${NAME_PATTERN} ]] || usage
         force_args+=(--force "$2")
+        shift
+        ;;
+      --core-commit)
+        [[ $# -ge 2 && "$2" =~ ^[0-9a-f]{40}$ ]] || usage
+        pinned_core_commit="$2"
         shift
         ;;
       *) usage ;;
@@ -83,6 +93,12 @@ fetch_snapshot() {
     log "plan.py commit printed '${core_commit}', not a commit SHA"
     exit 1
   fi
+  [[ -n "${pinned_core_commit}" ]] || return 0
+  if [[ "${core_commit}" != "${pinned_core_commit}" ]]
+  then
+    log "API snapshot is at core ${core_commit}; rendering at the pinned ${pinned_core_commit}"
+  fi
+  core_commit="${pinned_core_commit}"
 }
 
 # brew bottle numbers a rebuild from origin/HEAD, which actions/checkout does
