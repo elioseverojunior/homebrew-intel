@@ -99,7 +99,11 @@ rebuilds `reports/` from a fresh API snapshot plus local git history, taps and
   gate. It runs on `pull_request_target`, so the base branch's workflow and
   `scripts/ci/verify_bot_pr.py` judge every pull request; it must never check
   out or run pull request code. Human pull requests pass as skipped and need
-  the owner to merge. A pull request by `elios-automator[bot]` passes only
+  the owner to merge, unless their head commit carries a `bottle-builder`
+  check run or is the head of another open same-repository `bottle/*` pull
+  request: checks belong to a commit, so a skip there would turn the gate
+  green for the bot's pull request too, and such a pull request fails. A
+  pull request by `elios-automator[bot]` passes only
   when it comes from a same-repository `bottle/<date>-<n>` branch into
   `main`, only touches `Formula/`, its commit and file counts match the
   event (below the API listing limits), its commits are verified bot commits,
@@ -123,34 +127,54 @@ rebuilds `reports/` from a fresh API snapshot plus local git history, taps and
 - No secret ever reaches the build host: formula code runs there as the
   runner's user and can read any ancestor's environment. Its `build.yml` has
   five jobs:
-  - `prepare` (hosted): resolves `main` to one commit; every other job checks
-    out exactly that commit, never a ref named by the host or its artifact.
-  - `build` (self-hosted, no token): `scripts/builder/run.sh --build-only`
-    renders, plans, builds and bottles, and uploads `.builder/out` (manifest,
+  - `prepare` (hosted): resolves `main` and homebrew-core's `HEAD` to one
+    commit each; every other job checks out exactly that tap commit, never a
+    ref named by the host or its artifact.
+  - `build` (self-hosted, no token): `scripts/builder/run.sh --build-only
+    --core-commit <prepare's core commit>` renders at that commit (logging
+    any difference from the API snapshot's), plans, builds and bottles, and
+    uploads `.builder/out` (manifest,
     bottles, rendered formulae, logs) as the `builder-out` artifact. It and
     `pour.sh` refuse to start when a GitHub token is in the environment.
-  - `verify` (hosted, no permissions): the trust boundary,
-    `scripts/builder/verify_artifact.py`. The manifest's tap commit must be
-    prepare's, and each core commit on homebrew-core's HEAD
-    (`scripts/ci/fetch-core.sh`). Every formula must be, bottle block aside,
-    exactly its core render, and every bottle block must parse as only the
-    lines brew writes, before any formula is evaluated.
+  - `verify` (hosted, `actions: read` only): the trust boundary,
+    `scripts/builder/verify_artifact.py`. It lists the run's artifacts, binds
+    the run to its single `builder-out` by id and digest
+    (`scripts/ci/builder_artifact.py`; publish and pour download that id and
+    re-check that digest) and computes the enabled closure itself
+    (`fetch-api.sh` plus `render.py --print-order`). The manifest's tap and
+    core commits must be prepare's (each core commit also on homebrew-core's
+    HEAD, `scripts/ci/fetch-core.sh`), and every formula must be in the
+    closure and be, bottle block aside, exactly its core render with the
+    closure as tap names, and every bottle block must parse as only the lines
+    brew writes, before any formula is evaluated. It never uses
+    `setup-homebrew` (which wipes the workspace of `homebrew-*` repositories)
+    but the image's Homebrew with every token unset.
     `scripts/builder/derive-versions.sh` then reads each version with
     `brew info` from the trusted renders (never an artifact file, with no
     token in reach), and the full check requires the manifest's versions,
-    root URLs, release tags, sha256 values and file names to agree with it.
-  - `publish` (hosted): repeats the pure check, mints the App token only
-    then, and runs `scripts/builder/publish.sh`: it uploads each bottle to the
-    release `<name>-<pkg_version>`, commits each formula to
-    `bottle/<date>-<run-number>` as a verified bot commit (render-only
-    formulae first), attests the last commit with the `bottle-builder` check
-    run, opens one pull request and one private issue per failed build.
+    root URLs, release tags, asset names, sha256 values and file names to
+    agree with it; a render-only formula keeps main's bottle block only while
+    its release tag is the derived version's.
+  - `publish` (hosted): repeats the pure check with verify's closure, mints
+    the App token only then, and runs `scripts/builder/publish.sh`: it
+    uploads each bottle to the release `<name>-<pkg_version>` (never
+    `--clobber`: an existing asset is kept only when its digest is the
+    tarball's, else the formula is refused), commits each formula to
+    `bottle/<date>-<run-number>`, a branch created at the verified tap commit,
+    as a verified bot commit (render-only formulae first), attests the last
+    commit with the `bottle-builder` check run, opens one pull request and one
+    private issue per failed build (a fenced log tail with `@` neutralised).
   - `pour` (self-hosted, no token): swaps each `--build-bottle` keg for a
     pour of its released bottle, since such a keg would rebuild from source
     on `reinstall`/`upgrade`.
+- No hosted job of the builder (`prepare`, `verify`, `publish`) or
+  `verify-bot-pr` restores a cache (`actions/cache`, a `setup-*` cache,
+  `jdx/mise-action`): any job can write cache entries, so a restore would run
+  code the trusted job did not check out. They use the image's tools.
 - What auto-merges: only the builder's own pull request, and only when
   `open-pr.sh` finds the branch head is the run's last commit, main's ruleset
-  requires `verify-bot-pr`, and then with `--match-head-commit` bound to that
+  requires `verify-bot-pr` from GitHub Actions (integration id 15368), and
+  then with `--match-head-commit` bound to that
   head. It merges after the five required checks (`lint-and-test`,
   `tap-syntax`, `drift`, `pour-test`, `verify-bot-pr`). Each commit chains on
   the run's previous one, so a commit pushed by anyone else is never built
