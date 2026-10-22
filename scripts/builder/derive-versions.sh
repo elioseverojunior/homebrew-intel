@@ -2,18 +2,20 @@
 
 set -Eeuo pipefail
 
-# Derive each built formula's pkg_version on the hosted runner, never from the
-# host-written manifest and never by evaluating an artifact file:
+# Derive each built or render-only formula's pkg_version on the hosted runner,
+# never from the host-written manifest and never by evaluating an artifact file:
 #   derive-versions.sh <renders-dir> <artifact-dir> <versions.json>
 # <renders-dir> holds the trusted renders `verify_artifact.py --formulae-only
 # --renders` wrote after proving each artifact formula equals its core render
 # with a strictly parsed bottle block; only that text, made from core, is ever
 # loaded. brew loads formulae only from a tap, so this builds a scratch tap
 # (the checkout's formulae plus the renders), links it as
-# elioseverojunior/homebrew-intel, trusts just the built formulae and reads
-# versions.stable and revision with `brew info`. The artifact only supplies the
-# built names. Writes {"<name>": "<pkg_version>"}. Refuses to run with any
-# token in its environment, since it loads formula code.
+# elioseverojunior/homebrew-intel, trusts just the artifact's formulae and
+# reads versions.stable and revision with `brew info`. The artifact only
+# supplies the names (built, then render-only; verify_artifact.py checks a
+# render-only formula's kept bottle block against its version). Writes
+# {"<name>": "<pkg_version>"}. Refuses to run with any token in its
+# environment, since it loads formula code.
 # Env: TAP_DIR (the checkout; default this script's repository).
 
 readonly TAP="elioseverojunior/intel"
@@ -70,14 +72,16 @@ print(pkg_version(formula)) if described == sys.argv[1] else sys.exit(f"brew inf
 ' "$1" "${script_dir}/../tap"
 }
 
-# Writes {"<name>": "<pkg_version>"} for the built formulae to <versions.json>.
+# Writes {"<name>": "<pkg_version>"} for the artifact's formulae to
+# <versions.json>.
 write_versions() {
-  local out="$1" built name names=() lines="" version
-  built="$(python3 "${script_dir}/manifest.py" rows "${out}" built)"
+  local out="$1" listed name names=() lines="" version
+  listed="$(python3 "${script_dir}/manifest.py" rows "${out}" built)"$'\n'
+  listed+="$(python3 "${script_dir}/manifest.py" rows "${out}" render_only)"
   while IFS=$'\t' read -r name _ <&3
   do
     [[ -z "${name}" ]] || names+=("${name}")
-  done 3<<<"${built}"
+  done 3<<<"${listed}"
   [[ ${#names[@]} -eq 0 ]] || brew trust --formula "${names[@]/#/${TAP}/}"
   for name in ${names[@]+"${names[@]}"}
   do

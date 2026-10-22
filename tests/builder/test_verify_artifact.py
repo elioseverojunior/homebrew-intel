@@ -16,6 +16,7 @@ from tests.builder.artifact_fixture import ArtifactTestCase
 from tests.tap.fixtures import TAP_BOTTLE, git
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "builder" / "verify_artifact.py"
+DERIVED = {"z3": "1.10.0", "llvm": "1.10.0", "lz4": "1.10.0"}
 
 
 class VerifyArtifactTest(ArtifactTestCase):
@@ -27,8 +28,8 @@ class VerifyArtifactTest(ArtifactTestCase):
 
     def problems(self, versions: dict[str, str] | None = None) -> list[str]:
         self.save()
-        derived = versions if versions is not None else {"z3": "1.10.0", "llvm": "1.10.0"}
-        return verify_artifact.problems(self.out, self.tap, self.core, derived)
+        derived = versions if versions is not None else DERIVED
+        return verify_artifact.problems(self.out, self.tap, self.core, self.pins(), derived)
 
     def assert_refused(self, fragment: str) -> None:
         found = self.problems()
@@ -39,8 +40,8 @@ class VerifyArtifactTest(ArtifactTestCase):
 
     def test_main_exits_zero_or_one(self):
         versions = self.out.parent / "versions.json"
-        versions.write_text(json.dumps({"z3": "1.10.0", "llvm": "1.10.0"}), encoding="utf-8")
-        argv = ["--artifact", str(self.out), "--tap", str(self.tap), "--versions", str(versions)]
+        versions.write_text(json.dumps(DERIVED), encoding="utf-8")
+        argv = [*self.pin_arguments(), "--versions", str(versions)]
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(verify_artifact.main(argv), 0, stderr.getvalue())
@@ -49,8 +50,8 @@ class VerifyArtifactTest(ArtifactTestCase):
         self.assertIn("verify-artifact: Formula/z/z3.rb", stderr.getvalue())
 
     def test_manifest_version_must_equal_the_derived_one(self):
-        self.assert_refused_with({"z3": "1.9.0", "llvm": "1.10.0"}, "z3: manifest version 1.10.0 is not 1.9.0")
-        self.assert_refused_with({"llvm": "1.10.0"}, "z3: no derived version")
+        self.assert_refused_with(DERIVED | {"z3": "1.9.0"}, "z3: manifest version 1.10.0 is not 1.9.0")
+        self.assert_refused_with({"llvm": "1.10.0", "lz4": "1.10.0"}, "z3: no derived version")
 
     def test_versions_with_slash_or_space_are_refused(self):
         for version in ("1.0/../x", "1.0 x"):
@@ -60,20 +61,20 @@ class VerifyArtifactTest(ArtifactTestCase):
     def test_two_formulae_may_not_share_a_release_tag(self):
         self.entry("built", "z3")["version"] = "1-1"
         clash = dict(self.entry("built", "z3"), name="z3-1", version="1", relpath="Formula/z/z3-1.rb")
+        clash["tarball"] = "z3-1-1.sequoia.bottle.tar.gz"
         self.manifest["built"].append(clash)
-        found = self.problems({"z3": "1-1", "z3-1": "1", "llvm": "1.10.0"})
+        found = self.problems(DERIVED | {"z3": "1-1", "z3-1": "1"})
         self.assertIn("release tag z3-1-1 is claimed more than once", found)
 
     def test_formulae_only_mode_skips_bottle_contents_and_versions(self):
         (self.out / "bottles" / self.entry("built", "z3")["tarball"]).write_bytes(b"other")
-        self.save()
-        self.assertEqual(verify_artifact.problems(self.out, self.tap, self.core, None), [])
+        self.assertEqual(self.formulae_only(), [])
         self.edit("Formula/z/z3.rb", "  def install\n", '  def install\n    system "curl", "evil"\n')
-        self.assertNotEqual(verify_artifact.problems(self.out, self.tap, self.core, None), [])
+        self.assertNotEqual(self.formulae_only(), [])
 
     def formulae_only(self) -> list[str]:
         self.save()
-        return verify_artifact.problems(self.out, self.tap, self.core, None)
+        return verify_artifact.problems(self.out, self.tap, self.core, self.pins(), None)
 
     def test_hidden_code_in_a_bottle_block_fails_before_any_evaluation(self):
         self.edit("Formula/z/z3.rb", "    sha256 cellar: :any,", '    system "curl", "evil"\n    sha256 cellar: :any,')
@@ -96,13 +97,13 @@ class VerifyArtifactTest(ArtifactTestCase):
     def test_write_renders_writes_the_trusted_render_only(self):
         renders = self.directory()
         self.save()
-        self.assertEqual(verify_artifact.write_renders(self.out, self.tap, self.core, renders), [])
+        self.assertEqual(verify_artifact.write_renders(self.out, self.tap, self.core, self.pins(), renders), [])
         names = {"lz4", "z3", "llvm"}
         self.assertEqual((renders / "Formula/l/llvm.rb").read_text(encoding="utf-8"), self.render("llvm", names))
         self.assertEqual((renders / "Formula/l/lz4.rb").read_text(encoding="utf-8"), self.render("lz4", names))
         self.edit("Formula/z/z3.rb", "    sha256 cellar: :any,", '    system "x"\n    sha256 cellar: :any,')
         again = self.directory()
-        self.assertNotEqual(verify_artifact.write_renders(self.out, self.tap, self.core, again), [])
+        self.assertNotEqual(verify_artifact.write_renders(self.out, self.tap, self.core, self.pins(), again), [])
         self.assertEqual(list(again.iterdir()), [])
 
     def assert_refused_with(self, versions: dict[str, str], fragment: str) -> None:
@@ -113,9 +114,9 @@ class VerifyArtifactTest(ArtifactTestCase):
         self.edit("Formula/l/llvm.rb", "  def install\n", '  def install\n    system "curl", "evil"\n')
         self.assert_refused("Formula/l/llvm.rb: differs from core@")
 
-    def test_render_from_another_core_commit_is_refused(self):
+    def test_core_commit_must_be_the_pinned_one(self):
         self.manifest["core_commit"] = "0" * 40
-        self.assert_refused("not in")
+        self.assert_refused(f"core_commit {'0' * 40} is not the pinned {self.commit}")
 
     def test_invalid_name_and_relpath_are_refused(self):
         self.entry("built", "z3")["name"] = "../z3"
@@ -197,11 +198,11 @@ class VerifyArtifactTest(ArtifactTestCase):
         self.write(self.out / "Formula/l/lz4.rb", apply_bottle(edited, TAP_BOTTLE))
         self.assertEqual(self.problems(), [])
         self.save()
-        self.assertEqual(verify_artifact.needed_commits(self.out, self.tap), [self.commit, base])
+        self.assertEqual(verify_artifact.needed_commits(self.out, self.tap, self.pins()), [self.commit, base])
 
     def test_list_commits_prints_the_core_commit(self):
         result = subprocess.run(
-            [sys.executable, str(SCRIPT), "--artifact", str(self.out), "--tap", str(self.tap), "--list-commits"],
+            [sys.executable, str(SCRIPT), *self.pin_arguments(), "--list-commits"],
             capture_output=True,
             text=True,
             check=False,

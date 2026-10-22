@@ -3,8 +3,9 @@
 ArtifactTestCase builds core (lz4, z3, llvm depending on z3), a tap checkout
 committed with lz4 (bottled on main), and an artifact that bottles llvm and z3
 (z3 only exists in the artifact, so llvm's dependency is qualified) and
-re-renders lz4 as render-only with main's bottle block. Tests then break one
-thing and expect verify_artifact to refuse.
+re-renders lz4 as render-only with main's bottle block. The pins are what the
+hosted jobs resolved: the core commit and the enabled closure (lz4, z3, llvm).
+Tests then break one thing and expect verify_artifact to refuse.
 """
 
 import hashlib
@@ -16,6 +17,7 @@ from pathlib import Path
 from bottles import root_url
 from render import render_formula
 from transform import apply_bottle
+from verify_artifact import Pins
 
 from tests.tap.fixtures import CORE_FORMULAE, TAP_BOTTLE, git
 
@@ -51,7 +53,18 @@ class ArtifactTestCase(unittest.TestCase):
             self.add_built(name, self.render(name, names))
         self.write(self.out / "Formula/l/lz4.rb", apply_bottle(self.render("lz4", names), TAP_BOTTLE))
         self.manifest["render_only"].append({"name": "lz4", "relpath": "Formula/l/lz4.rb"})
+        self.closure = {"lz4", "z3", "llvm"}
         self.save()
+
+    def pins(self) -> Pins:
+        return Pins(self.commit, frozenset(self.closure))
+
+    def pin_arguments(self) -> list[str]:
+        """verify_artifact.py's --artifact, --tap, --core-commit and --closure for the pins."""
+        closure = self.out.parent / "closure.txt"
+        closure.write_text("".join(f"{name}\n" for name in sorted(self.closure)), encoding="utf-8")
+        locations = ["--artifact", str(self.out), "--tap", str(self.tap)]
+        return [*locations, "--core-commit", self.commit, "--closure", str(closure)]
 
     def directory(self) -> Path:
         directory = tempfile.TemporaryDirectory()

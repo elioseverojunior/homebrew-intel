@@ -2,29 +2,33 @@
 
 The trust boundary between the self-hosted build (which runs formula code and
 holds no secret) and the hosted publish job (which holds the App token). It
-fails closed unless the manifest is well formed, names this checkout's commit,
-and every built or render-only formula is, bottle block aside, exactly what
-render.py makes from homebrew-core at the manifest's core commit (the entry's
-base and patch for a patched formula), so no hand-made formula code can pass.
-A built formula's version must be the one the publish job derived itself from
-the verified formula (derive-versions.sh), never just the manifest's, and its
+fails closed unless the manifest is well formed (manifest_check.py), names this
+checkout's commit and the core commit the hosted prepare job pinned, every
+built or render-only formula is in the enabled closure the hosted verify job
+computed (render.py --print-order), and each is, bottle block aside, exactly
+what render.py makes from homebrew-core at that commit (the entry's base and
+patch for a patched formula) with the closure as the tap names, so neither
+hand-made formula code nor a host-chosen tap dependency can pass. A built
+formula's version must be the one the hosted job derived itself from the
+verified formula (derive-versions.sh), never just the manifest's, and its
 bottle block must agree with that version, its tarball and its bottle JSON
-(bottle_check.py); a render-only one keeps main's block or has none.
+(bottle_check.py). A render-only one has no block, or main's while its release
+tag is the derived version's.
 
-Usage: verify_artifact.py --artifact DIR [--tap DIR]
-(--formulae-only [--renders DIR] | --versions JSON | --list-commits). The
-core repository comes from HOMEBREW_CORE_REPO. --formulae-only checks the
-manifest, each bottle section's strict grammar and the formula texts, before
-anything evaluates a formula; with --renders it then writes each formula's
-trusted render (made here from core, never copied from the artifact) for
-derive-versions.sh to evaluate. --versions maps each built name to its
-derived pkg_version for the full check. --list-commits validates the manifest
-and prints the core commits to fetch, one per line.
+Usage: verify_artifact.py --artifact DIR [--tap DIR] --core-commit SHA
+--closure FILE (--formulae-only [--renders DIR] | --versions JSON |
+--list-commits). The core repository comes from HOMEBREW_CORE_REPO.
+--formulae-only checks the manifest, each bottle section's strict grammar and
+the formula texts, before anything evaluates a formula; with --renders it then
+writes each formula's trusted render (made here from core, never copied from
+the artifact) for derive-versions.sh to evaluate. --versions maps each built
+and render-only name to its derived pkg_version for the full check.
+--list-commits validates the manifest and prints the core commits to fetch,
+one per line.
 """
 
 import argparse
 import json
-import re
 import subprocess
 import sys
 from collections.abc import Mapping
@@ -34,67 +38,28 @@ from typing import NamedTuple
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tap"))
 from bottle_check import Bottle, syntax_problems
 from bottle_check import problems as bottle_problems
-from bottles import release_tag
-from core_source import core_repo, formula_relpath, read_formula
+from bottles import bottle_release_tag, release_tag
+from core_source import core_repo, read_formula
 from drift import short_diff
 from enabled import Entry, load_enabled
-from manifest import MANIFEST, SCALARS, SECTIONS
+from manifest import MANIFEST
+from manifest_check import PATTERNS, Pins, closure_problems, load_closure, manifest_problems
 from render import RENDER_ERRORS, formula_files, patch_path, render_formula
 from transform import BOTTLE_MARKER, bottle_blocks, strip_bottle_block
 
-PATTERNS = {
-    "name": re.compile(r"[a-z0-9][a-z0-9@._+-]*"),
-    "version": re.compile(r"[0-9A-Za-z][0-9A-Za-z._+-]*"),
-    "tarball": re.compile(r"[a-z0-9][A-Za-z0-9@._+-]*\.tar\.gz"),
-    "json": re.compile(r"[a-z0-9][A-Za-z0-9@._+-]*\.json"),
-    "log": re.compile(r"[a-z0-9][A-Za-z0-9@._+-]*\.log"),
-    "core_commit": re.compile(r"[0-9a-f]{40}"),
-    "tap_sha": re.compile(r"[0-9a-f]{40}"),
-    "branch_date": re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}"),
-}
 PUBLISHED = ("built", "render_only")
 
 
 class Context(NamedTuple):
-    """What every formula check reads: the artifact, the checkout and core."""
+    """What every formula check reads: the artifact, the checkout, core and the pins."""
 
     out: Path
     tap: Path
     repo: Path
     document: Mapping
     entries: Mapping[str, Entry]
-    tap_names: set[str]
+    pins: Pins
     versions: Mapping[str, str] | None
-
-
-def _field_problems(label: str, entry: Mapping, keys: tuple[str, ...]) -> list[str]:
-    if not isinstance(entry, Mapping) or tuple(sorted(entry)) != tuple(sorted(keys)):
-        return [f"{label}: expected exactly the keys {', '.join(keys)}"]
-    found = [f"{label}: {key} is not a string" for key in keys if not isinstance(entry[key], str)]
-    for key in keys:
-        pattern = PATTERNS.get(key)
-        if not found and pattern and not pattern.fullmatch(entry[key]):
-            found.append(f"{label}: invalid {key} '{entry[key]}'")
-    if not found and "relpath" in entry and entry["relpath"] != (expected := formula_relpath(entry["name"])):
-        found.append(f"{label}: relpath {entry['relpath']} is not {expected}")
-    return found
-
-
-def manifest_problems(document: object, tap_sha: str) -> list[str]:
-    """Shape problems of the manifest; the per-formula checks need none."""
-    if not isinstance(document, Mapping) or set(document) != {*SCALARS, *SECTIONS}:
-        return [f"{MANIFEST}: expected exactly the keys {', '.join([*SCALARS, *SECTIONS])}"]
-    found = _field_problems(MANIFEST, {key: document[key] for key in SCALARS}, SCALARS)
-    if not found and document["tap_sha"] != tap_sha:
-        found.append(f"{MANIFEST}: tap_sha {document['tap_sha']} is not the checkout's {tap_sha}")
-    names: list[str] = []
-    for section, keys in SECTIONS.items():
-        entries = document[section] if isinstance(document[section], list) else [None]
-        for index, entry in enumerate(entries):
-            found += _field_problems(f"{section}[{index}]", entry, keys)
-            names += [entry["name"]] if isinstance(entry, Mapping) and "name" in entry else []
-    found += [f"{name} is listed more than once" for name in sorted({n for n in names if names.count(n) > 1})]
-    return found
 
 
 def expected_formula(context: Context, name: str) -> str:
@@ -104,8 +69,8 @@ def expected_formula(context: Context, name: str) -> str:
     patch = patch_path(context.tap, name)
     patch_text = patch.read_text(encoding="utf-8") if patched and patch.is_file() else None
     source = read_formula(context.repo, name, commit)
-    tap_names = context.tap_names
-    return render_formula(source, name=name, commit=commit, tap_names=tap_names, patch=patch_text, bottle_block=None)
+    closure = context.pins.closure
+    return render_formula(source, name=name, commit=commit, tap_names=closure, patch=patch_text, bottle_block=None)
 
 
 def _regular_file(path: Path, label: str) -> list[str]:
@@ -141,6 +106,23 @@ def _bottle_problems(context: Context, entry: Mapping, text: str) -> list[str]:
     return bottle_problems(block, json.loads(json_path.read_text(encoding="utf-8")), bottle)
 
 
+def _render_only_problems(context: Context, entry: Mapping, text: str) -> list[str]:
+    """Main's block stays only while its tag is the derived version's (render.py's existing_bottle)."""
+    if not (blocks := bottle_blocks(text)):
+        return []
+    name, tag = entry["name"], bottle_release_tag(blocks[0])
+    if (derived := (context.versions or {}).get(name)) is None:
+        return ["render-only bottle block needs a derived version"]
+    expected = release_tag(name, derived)
+    return [] if tag == expected else [f"render-only bottle block is for {tag}, not {expected}"]
+
+
+def _contents_problems(context: Context, section: str, entry: Mapping, text: str) -> list[str]:
+    if context.versions is None:
+        return []
+    return (_bottle_problems if section == "built" else _render_only_problems)(context, entry, text)
+
+
 def _checked_render(context: Context, section: str, entry: Mapping) -> tuple[list[str], str | None]:
     """Problems of one formula and, when there are none, its trusted render."""
     relpath = entry["relpath"]
@@ -153,7 +135,7 @@ def _checked_render(context: Context, section: str, entry: Mapping) -> tuple[lis
         expected = expected_formula(context, entry["name"])
     except RENDER_ERRORS as error:
         return [f"{relpath}: {error}"], None
-    found = [] if context.versions is None or section != "built" else _bottle_problems(context, entry, text)
+    found = _contents_problems(context, section, entry, text)
     if (actual := strip_bottle_block(text)) != expected:
         commit = context.document["core_commit"]
         found.append(f"differs from core@{commit} (+ patch):\n{short_diff(expected, actual, relpath).rstrip()}")
@@ -178,20 +160,20 @@ def version_problems(built: list[Mapping], versions: Mapping[str, str]) -> list[
     return found + [f"release tag {tag} is claimed more than once" for tag in duplicates]
 
 
-def _check(out: Path, tap: Path, repo: Path, versions: Mapping[str, str] | None) -> tuple[list[str], dict]:
+def _check(out: Path, tap: Path, repo: Path, pins: Pins, versions: Mapping[str, str] | None) -> tuple[list[str], dict]:
     try:
         document = json.loads((out / MANIFEST).read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         return [f"{MANIFEST}: {error}"], {}
-    if found := manifest_problems(document, checkout_sha(tap)):
+    if found := manifest_problems(document, checkout_sha(tap), pins.core_commit):
         return found, {}
     published = [(section, entry) for section in PUBLISHED for entry in document[section]]
     listed = {entry["relpath"] for _, entry in published}
     paths = [path.relative_to(out).as_posix() for path in formula_files(out)]
     found = [f"{path} is not listed in the manifest" for path in paths if path not in listed]
-    tap_names = {path.stem for path in formula_files(tap)} | {entry["name"] for _, entry in published}
+    found += closure_problems([entry["name"] for _, entry in published], pins.closure)
     entries = {entry.name: entry for entry in load_enabled(tap / "enabled.toml")}
-    context = Context(out, tap, repo, document, entries, tap_names, versions)
+    context = Context(out, tap, repo, document, entries, pins, versions)
     if versions is not None:
         found += version_problems(document["built"], versions)
     renders = {}
@@ -202,18 +184,18 @@ def _check(out: Path, tap: Path, repo: Path, versions: Mapping[str, str] | None)
     return found, renders
 
 
-def problems(out: Path, tap: Path, repo: Path, versions: Mapping[str, str] | None) -> list[str]:
+def problems(out: Path, tap: Path, repo: Path, pins: Pins, versions: Mapping[str, str] | None) -> list[str]:
     """Every reason the artifact must not be published; empty when it may.
 
     With versions None, the manifest, the bottle sections' grammar and the
     formula texts are checked, but not bottle contents or versions.
     """
-    return _check(out, tap, repo, versions)[0]
+    return _check(out, tap, repo, pins, versions)[0]
 
 
-def write_renders(out: Path, tap: Path, repo: Path, renders_dir: Path) -> list[str]:
+def write_renders(out: Path, tap: Path, repo: Path, pins: Pins, renders_dir: Path) -> list[str]:
     """Run the formulae-only check; only when it passes, write each trusted render."""
-    found, renders = _check(out, tap, repo, None)
+    found, renders = _check(out, tap, repo, pins, None)
     if found:
         return found
     for relpath, text in renders.items():
@@ -222,9 +204,9 @@ def write_renders(out: Path, tap: Path, repo: Path, renders_dir: Path) -> list[s
     return []
 
 
-def needed_commits(out: Path, tap: Path) -> list[str]:
+def needed_commits(out: Path, tap: Path, pins: Pins) -> list[str]:
     document = json.loads((out / MANIFEST).read_text(encoding="utf-8"))
-    if found := manifest_problems(document, checkout_sha(tap)):
+    if found := manifest_problems(document, checkout_sha(tap), pins.core_commit):
         raise ValueError("; ".join(found))
     names = {entry["name"] for section in PUBLISHED for entry in document[section]}
     bases = {e.base for e in load_enabled(tap / "enabled.toml") if e.kind == "patched" and e.base and e.name in names}
@@ -235,6 +217,8 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--artifact", type=Path, required=True, help="the downloaded builder-out directory")
     parser.add_argument("--tap", type=Path, default=Path(__file__).resolve().parents[2], help="the tap checkout")
+    parser.add_argument("--core-commit", required=True, help="the homebrew-core commit the prepare job pinned")
+    parser.add_argument("--closure", type=Path, required=True, help="the enabled closure, whitespace-separated")
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--formulae-only", action="store_true", help="check the manifest and formula texts only")
     mode.add_argument("--versions", type=Path, help="JSON mapping each built name to its derived pkg_version")
@@ -243,21 +227,24 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.renders and not args.formulae_only:
         parser.error("--renders needs --formulae-only")
+    if not PATTERNS["core_commit"].fullmatch(args.core_commit):
+        parser.error("--core-commit needs a 40-hex commit")
     return args
 
 
 def run(args: argparse.Namespace) -> list[str]:
+    pins = Pins(args.core_commit, load_closure(args.closure))
     if args.list_commits:
-        print("\n".join(needed_commits(args.artifact, args.tap)))
+        print("\n".join(needed_commits(args.artifact, args.tap, pins)))
         return []
     if args.renders:
-        return write_renders(args.artifact, args.tap, core_repo(), args.renders)
+        return write_renders(args.artifact, args.tap, core_repo(), pins, args.renders)
     versions = None
     if args.versions:
         versions = json.loads(args.versions.read_text(encoding="utf-8"))
         if not isinstance(versions, dict) or not all(isinstance(v, str) for v in versions.values()):
             return [f"{args.versions}: expected a JSON object of name to version strings"]
-    return problems(args.artifact, args.tap, core_repo(), versions)
+    return problems(args.artifact, args.tap, core_repo(), pins, versions)
 
 
 def main(argv: list[str] | None = None) -> int:

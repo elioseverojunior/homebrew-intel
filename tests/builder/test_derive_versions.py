@@ -33,6 +33,7 @@ class DeriveVersionsTest(unittest.TestCase):
         self.fake.respond("brew", "--repository", stdout=f"{self.brew}\n")
         self.fake.respond("brew", "info", "--json=v2", f"{TAP}/z3", stdout=info("z3", "4.13.0"))
         self.fake.respond("brew", "info", "--json=v2", f"{TAP}/llvm", stdout=info("llvm", "19.1.0", 2))
+        self.fake.respond("brew", "info", "--json=v2", f"{TAP}/xz", stdout=info("xz", "5.6.3"))
         self.versions = self.root / "versions.json"
 
     def directory(self) -> Path:
@@ -52,15 +53,16 @@ class DeriveVersionsTest(unittest.TestCase):
         argv = ["bash", str(SCRIPT), str(self.renders), str(self.out), str(self.versions)]
         return subprocess.run(argv, env=env, capture_output=True, text=True, check=False)
 
-    def test_reads_each_built_version_from_brew(self):
+    def test_reads_each_built_and_render_only_version_from_brew(self):
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(self.versions.read_text(encoding="utf-8")), {"z3": "4.13.0", "llvm": "19.1.0_2"})
+        versions = json.loads(self.versions.read_text(encoding="utf-8"))
+        self.assertEqual(versions, {"z3": "4.13.0", "llvm": "19.1.0_2", "xz": "5.6.3"})
 
-    def test_trusts_only_the_built_formulae_in_a_scratch_tap(self):
+    def test_trusts_only_the_artifact_formulae_in_a_scratch_tap(self):
         self.assertEqual(self.run_script().returncode, 0)
         trusted = [argv for argv in self.fake.argvs() if argv[:2] == ["brew", "trust"]]
-        self.assertEqual(trusted, [["brew", "trust", "--formula", f"{TAP}/z3", f"{TAP}/llvm"]])
+        self.assertEqual(trusted, [["brew", "trust", "--formula", f"{TAP}/z3", f"{TAP}/llvm", f"{TAP}/xz"]])
         link = self.brew / "Library/Taps/elioseverojunior/homebrew-intel"
         self.assertTrue(link.is_symlink())
         scratch = link.resolve()
