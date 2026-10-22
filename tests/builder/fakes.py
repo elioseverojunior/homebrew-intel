@@ -9,6 +9,11 @@ silently. `brew bottle --json` also writes a bottle JSON and tarball in its cwd,
 the way the real command does, with `filename` URL-encoded as brew encodes it.
 A rule may sleep before answering, and each call that runs to completion
 appends a second `{"done": argv}` line.
+
+`FakeBin.serve_git(main_sha)` makes the `gh` stub emulate the few GitHub API
+calls the publish scripts make, with branch heads kept in a state file: ref
+reads, ref creation, `createCommitOnBranch` (stdin is logged, the head moves),
+and compare. It fails like gh does ("Not Found") for unknown branches.
 """
 
 import json
@@ -24,13 +29,56 @@ import json, os, sys, time
 from pathlib import Path
 from urllib.parse import quote
 
+REPO_API = "repos/elioseverojunior/homebrew-intel/"
+
 LOG, CONFIG = {log!r}, {config!r}
 tool, args = os.path.basename(sys.argv[0]), sys.argv[1:]
 call = [tool, *args]
 env = {{key: value for key, value in os.environ.items() if key.startswith("HOMEBREW_")}}
+stdin = sys.stdin.read() if "--input" in args else None
 with open(LOG, "a", encoding="utf-8") as log:
-    log.write(json.dumps({{"argv": call, "cwd": os.getcwd(), "env": env}}) + "\\n")
+    log.write(json.dumps({{"argv": call, "cwd": os.getcwd(), "env": env, "stdin": stdin}}) + "\\n")
 config = json.loads(Path(CONFIG).read_text(encoding="utf-8"))
+
+
+def serve_git():
+    state_file = Path(CONFIG).with_name("git-state.json")
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    heads, ahead = state["heads"], state["ahead"]
+    path = args[1] if call[:2] == ["gh", "api"] and len(args) > 1 else ""
+    sha = None
+    if path.startswith(REPO_API + "git/ref/heads/"):
+        sha = heads.get(path.removeprefix(REPO_API + "git/ref/heads/"))
+    elif path.startswith(REPO_API + "compare/main..."):
+        branch = path.removeprefix(REPO_API + "compare/main...")
+        sha = str(ahead.get(branch, 0)) if branch in heads else None
+    elif path == REPO_API + "git/refs":
+        fields = dict(a.split("=", 1) for a in args if "=" in a and not a.startswith("-"))
+        heads[fields["ref"].removeprefix("refs/heads/")] = fields["sha"]
+        sha = ""
+    elif path == "graphql":
+        change = json.loads(stdin)["variables"]["input"]
+        branch = change["branch"]["branchName"]
+        if heads.get(branch) != change["expectedHeadOid"]:
+            sys.stderr.write("gh: expectedHeadOid does not match\\n")
+            sys.exit(1)
+        ahead[branch] = ahead.get(branch, 0) + 1
+        heads[branch] = f"commit{{ahead[branch]}}"
+        sha = json.dumps({{"data": {{"createCommitOnBranch": {{"commit": {{"oid": heads[branch], "url": "u"}}}}}}}})
+    elif call[:3] == ["gh", "pr", "create"]:
+        sha = ""
+    else:
+        return
+    state_file.write_text(json.dumps(state), encoding="utf-8")
+    if sha is None:
+        sys.stderr.write("gh: Not Found (HTTP 404)\\n")
+        sys.exit(1)
+    jq = args[args.index("--jq") + 1] if "--jq" in args else ""
+    shown = json.dumps({{"object": {{"sha": sha}}}}) if path.startswith(REPO_API + "git/ref/") and not jq else sha
+    sys.stdout.write(shown)
+    sys.exit(0)
+
+
 if call[:2] == ["brew", "bottle"] and "--json" in args and "--merge" not in args:
     name = args[-1].rsplit("/", 1)[-1]
     root_url = next(arg for arg in args if arg.startswith("--root-url="))
@@ -41,6 +89,8 @@ if call[:2] == ["brew", "bottle"] and "--json" in args and "--merge" not in args
     document = {{f"elioseverojunior/intel/{{name}}": {{"bottle": {{"tags": {{"sequoia": tag}}}}}}}}
     Path(f"{{name}}--{{version}}.sequoia.bottle.json").write_text(json.dumps(document), encoding="utf-8")
 rule = next((r for r in config["rules"] if call[: len(r["argv"])] == r["argv"]), None)
+if rule is None and config.get("serve_git") and tool == "gh":
+    serve_git()
 rule = rule or {{"stdout": "", "exit": 0, "sleep": 0}}
 time.sleep(rule["sleep"])
 sys.stdout.write(rule["stdout"])
@@ -55,6 +105,7 @@ class FakeBin:
 
     def __init__(self) -> None:
         self.rules: list[dict] = []
+        self.serving_git = False
 
     def __enter__(self) -> Self:
         self.root = Path(tempfile.mkdtemp())
@@ -74,6 +125,18 @@ class FakeBin:
 
     def __exit__(self, *_exc: object) -> None:
         shutil.rmtree(self.root, ignore_errors=True)
+
+    def serve_git(self, main_sha: str = "mainsha", branches: dict[str, int] | None = None) -> None:
+        """Emulate GitHub's ref, commit and compare endpoints; `branches` maps name to commits ahead."""
+        ahead = dict(branches or {})
+        heads = {"main": main_sha, **{branch: f"commit{count}" for branch, count in ahead.items()}}
+        state = {"heads": heads, "ahead": ahead}
+        (self.root / "git-state.json").write_text(json.dumps(state), encoding="utf-8")
+        self.serving_git = True
+        self._save()
+
+    def git_state(self) -> dict:
+        return json.loads((self.root / "git-state.json").read_text(encoding="utf-8"))
 
     def respond(self, *argv: str, stdout: str = "", exit_code: int = 0, sleep: float = 0) -> None:
         self.rules.append({"argv": list(argv), "stdout": stdout, "exit": exit_code, "sleep": sleep})
@@ -101,5 +164,5 @@ class FakeBin:
         return {**base, "PATH": f"{self.bin}:/usr/bin:/bin"}
 
     def _save(self) -> None:
-        document = {"rules": self.rules}
+        document = {"rules": self.rules, "serve_git": self.serving_git}
         self.config.write_text(json.dumps(document), encoding="utf-8")
