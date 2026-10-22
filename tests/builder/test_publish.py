@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.builder.fakes import FakeBin
+from tests.builder.fakes import FakeBin, fake_oid
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts" / "builder"
 REPO = "elioseverojunior/homebrew-intel"
@@ -43,8 +43,13 @@ class PublishTest(unittest.TestCase):
         argv = ["bash", str(SCRIPTS / script), *args]
         return subprocess.run(argv, env=env, capture_output=True, text=True, check=False)
 
-    def commit(self, name: str = "lz4", headline: str = HEADLINE) -> subprocess.CompletedProcess:
-        return self.run_script("commit-formula.sh", BRANCH, name, headline)
+    def commit(self, name: str = "lz4", headline: str = HEADLINE, *parent: str) -> subprocess.CompletedProcess:
+        return self.run_script("commit-formula.sh", BRANCH, name, headline, *parent)
+
+    def push_foreign_commit(self, head: str) -> None:
+        state = self.fake.git_state()
+        state["heads"][BRANCH] = head
+        (self.fake.root / "git-state.json").write_text(json.dumps(state), encoding="utf-8")
 
     def mutations(self) -> list[dict]:
         calls = [call for call in self.fake.calls() if call["argv"][:3] == ["gh", "api", "graphql"]]
@@ -54,8 +59,8 @@ class PublishTest(unittest.TestCase):
 class CommitFormulaTest(PublishTest):
     def test_creates_branch_once(self):
         self.fake.serve_git("abc123")
-        for name in ("lz4", "zstd"):
-            self.assertEqual(self.commit(name).returncode, 0)
+        self.assertEqual(self.commit("lz4").returncode, 0)
+        self.assertEqual(self.commit("zstd", "zstd: 1.5", fake_oid(1)).returncode, 0)
         creates = [argv for argv in self.fake.argvs() if argv[:3] == ["gh", "api", f"{API}git/refs"]]
         expected = ["gh", "api", f"{API}git/refs", "-f", f"ref=refs/heads/{BRANCH}", "-f", "sha=abc123"]
         self.assertEqual(creates, [expected])
@@ -76,21 +81,60 @@ class CommitFormulaTest(PublishTest):
 
     def test_prints_the_created_commit_oid(self):
         self.fake.serve_git("abc123")
-        first, second = self.commit("lz4"), self.commit("zstd", "zstd: add 1.5 sequoia bottle")
+        first = self.commit("lz4")
+        second = self.commit("zstd", "zstd: add 1.5 sequoia bottle", first.stdout.strip())
         self.assertEqual((first.returncode, second.returncode), (0, 0), first.stderr + second.stderr)
-        self.assertEqual((first.stdout, second.stdout), ("commit1\n", "commit2\n"))
+        self.assertEqual((first.stdout, second.stdout), (f"{fake_oid(1)}\n", f"{fake_oid(2)}\n"))
 
-    def test_second_commit_uses_new_head(self):
+    def test_second_commit_chains_on_the_expected_parent(self):
         self.fake.serve_git("abc123")
         self.assertEqual(self.commit("lz4").returncode, 0)
-        self.assertEqual(self.commit("zstd", "zstd: add 1.5 sequoia bottle").returncode, 0)
+        self.assertEqual(self.commit("zstd", "zstd: add 1.5 sequoia bottle", fake_oid(1)).returncode, 0)
         first, second = (request["variables"]["input"] for request in self.mutations())
         self.assertEqual(first["expectedHeadOid"], "abc123")
-        self.assertEqual(second["expectedHeadOid"], "commit1")
+        self.assertEqual(second["expectedHeadOid"], fake_oid(1))
         self.assertEqual(second["fileChanges"]["additions"][0]["path"], "Formula/z/zstd.rb")
 
+    def test_foreign_head_refuses_the_commit(self):
+        self.fake.serve_git("abc123")
+        self.assertEqual(self.commit("lz4").returncode, 0)
+        self.push_foreign_commit(FOREIGN)
+        result = self.commit("zstd", "zstd: add 1.5 sequoia bottle", fake_oid(1))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(f"refusing: {BRANCH} head {FOREIGN} is not the expected parent {fake_oid(1)}", result.stderr)
+        self.assertEqual(len(self.mutations()), 1)
+        self.assertEqual(result.stdout, "")
+
+    def test_existing_branch_without_a_parent_is_refused(self):
+        self.fake.serve_git("abc123", {BRANCH: 1})
+        result = self.commit()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(f"refusing: {BRANCH} already exists at {fake_oid(1)}", result.stderr)
+        self.assertEqual(self.mutations(), [])
+        self.assertNotIn(f"{API}git/refs", [argv[2] for argv in self.fake.argvs()])
+
+    def test_missing_branch_with_a_parent_is_refused(self):
+        self.fake.serve_git("abc123")
+        result = self.commit("lz4", HEADLINE, fake_oid(1))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(f"refusing: {BRANCH} head  is not the expected parent", result.stderr)
+        self.assertEqual(self.mutations(), [])
+
+    def test_foreign_push_between_builder_commits_blocks_the_pr(self):
+        self.fake.serve_git("abc123")
+        first = self.commit("lz4")
+        self.push_foreign_commit(FOREIGN)
+        self.assertEqual(self.commit("zstd", "zstd: 1.5", first.stdout.strip()).returncode, 1)
+        summary = self.tap / "summary.md"
+        summary.write_text("Bottled lz4\n", encoding="utf-8")
+        result = self.run_script("open-pr.sh", BRANCH, first.stdout.strip(), str(summary))
+        self.assertEqual(result.returncode, 1)
+        called = [argv[:3] for argv in self.fake.argvs()]
+        self.assertNotIn(["gh", "api", f"{API}check-runs"], called)
+        self.assertNotIn(["gh", "pr", "merge"], called)
+
     def test_graphql_failure_fails_the_script(self):
-        self.fake.serve_git("abc123", {BRANCH: 0})
+        self.fake.serve_git("abc123")
         self.fake.fail("gh", "api", "graphql")
         self.assertNotEqual(self.commit().returncode, 0)
 
@@ -105,6 +149,7 @@ class CommitFormulaTest(PublishTest):
 
     def test_rejects_bad_arguments(self):
         bad = (("main", "lz4", HEADLINE), (BRANCH, "../lz4", HEADLINE), (BRANCH, "lz4", ""), (BRANCH, "nope", HEADLINE))
+        bad += ((BRANCH, "lz4", HEADLINE, "commit1"), (BRANCH, "lz4", HEADLINE, EXPECTED, "extra"))
         for args in bad:
             result = self.run_script("commit-formula.sh", *args)
             self.assertNotEqual(result.returncode, 0, args)

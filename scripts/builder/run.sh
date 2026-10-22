@@ -314,12 +314,20 @@ open_issue() {
     log "warning: could not open an issue for ${name}"
 }
 
-# commit_to_branch <name> <headline>: commits the formula to the run branch and
-# records the commit it created in last_commit_file (a file, not a variable:
-# build_one runs this in a pipeline subshell). Its log lines go to stderr.
-# Explicit returns: callers use it as a condition, where errexit is off.
+# commit_to_branch <name> <headline>: commits the formula to the run branch on
+# top of the run's previous commit (none for the first: commit-formula.sh then
+# creates the branch) and records the commit it created in last_commit_file (a
+# file, not a variable: build_one runs this in a pipeline subshell). Its log
+# lines go to stderr. Explicit returns: callers use it as a condition, where
+# errexit is off.
 commit_to_branch() {
-  "${TAP_DIR}/scripts/builder/commit-formula.sh" "${branch}" "$1" "$2" >"${last_commit_file}.tmp" || return $?
+  local parent=""
+  if [[ -f "${last_commit_file}" ]]
+  then
+    parent="$(tail -n 1 "${last_commit_file}")" || return $?
+  fi
+  "${TAP_DIR}/scripts/builder/commit-formula.sh" "${branch}" "$1" "$2" ${parent:+"${parent}"} \
+    >"${last_commit_file}.tmp" || return $?
   mv -f "${last_commit_file}.tmp" "${last_commit_file}"
 }
 

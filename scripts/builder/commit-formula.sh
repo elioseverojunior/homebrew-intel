@@ -3,12 +3,16 @@
 set -Eeuo pipefail
 
 # Commit one tap formula to a run branch as a GPG-signed (GitHub-verified) commit:
-#   commit-formula.sh <branch> <name> <headline>
+#   commit-formula.sh <branch> <name> <headline> [<expected-parent-sha>]
 # Env: GH_TOKEN (App token), TAP_DIR (the run's tap checkout).
-# The branch is created from main's head on first use; every commit then goes
-# through GraphQL createCommitOnBranch with the branch's current head as
-# expectedHeadOid, so later commits build on the earlier ones. Prints the oid
-# of the commit it created on stdout (run.sh hands the last one to open-pr.sh).
+# Without <expected-parent-sha> (the run's first commit) the branch must not
+# exist yet: it is created from main's head, which becomes the parent. With it
+# (the oid of the run's previous commit) the branch head must be exactly that
+# commit. Either way the commit goes through GraphQL createCommitOnBranch with
+# the parent as expectedHeadOid, so GitHub enforces it too, and a commit pushed
+# by anyone else is never built upon (and so never attested by open-pr.sh).
+# Prints the oid of the commit it created on stdout; run.sh chains the next
+# commit on it and hands the last one to open-pr.sh.
 
 readonly REPO="elioseverojunior/homebrew-intel"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,9 +25,14 @@ log() {
 }
 
 validate_arguments() {
-  if [[ $# -ne 3 ]]
+  if [[ $# -lt 3 || $# -gt 4 ]]
   then
-    log "usage: commit-formula.sh <branch> <name> <headline>"
+    log "usage: commit-formula.sh <branch> <name> <headline> [<expected-parent-sha>]"
+    exit 2
+  fi
+  if [[ $# -eq 4 && ! "$4" =~ ^[0-9a-f]{40}$ ]]
+  then
+    log "invalid expected parent sha: '$4'"
     exit 2
   fi
   if [[ ! "$1" =~ ^bottle/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]+$ ]]
@@ -43,11 +52,31 @@ branch_head() {
   gh_lookup "repos/${REPO}/git/ref/heads/$1" --jq .object.sha
 }
 
+# Creates the branch from main's head and sets parent to that head. Fails when
+# the branch already exists: then this run did not create it.
 create_branch() {
-  local branch="$1" main_head
-  main_head="$(gh api "repos/${REPO}/git/ref/heads/main" --jq .object.sha)"
-  log "creating ${branch} from main ${main_head}"
-  gh api "repos/${REPO}/git/refs" -f "ref=refs/heads/${branch}" -f "sha=${main_head}" >/dev/null
+  local branch="$1" head
+  head="$(branch_head "${branch}")"
+  if [[ -n "${head}" ]]
+  then
+    log "refusing: ${branch} already exists at ${head}; this run did not create it"
+    exit 1
+  fi
+  parent="$(gh api "repos/${REPO}/git/ref/heads/main" --jq .object.sha)"
+  log "creating ${branch} from main ${parent}"
+  gh api "repos/${REPO}/git/refs" -f "ref=refs/heads/${branch}" -f "sha=${parent}" >/dev/null
+}
+
+# Sets parent to the expected commit, failing unless it is the branch head.
+expect_head() {
+  local branch="$1" head
+  head="$(branch_head "${branch}")"
+  if [[ "${head}" != "$2" ]]
+  then
+    log "refusing: ${branch} head ${head} is not the expected parent $2"
+    exit 1
+  fi
+  parent="$2"
 }
 
 # Prints the createCommitOnBranch request body (query + variables) as JSON.
@@ -87,20 +116,20 @@ formula_path() {
 
 main() {
   validate_arguments "$@"
-  local branch="$1" name="$2" headline="$3" path head response
+  local branch="$1" name="$2" headline="$3" path response parent=""
   path="$(formula_path "${name}")"
   if [[ ! -f "${TAP_DIR}/${path}" ]]
   then
     log "${TAP_DIR}/${path} does not exist"
     exit 1
   fi
-  head="$(branch_head "${branch}")"
-  if [[ -z "${head}" ]]
+  if [[ $# -eq 4 ]]
   then
+    expect_head "${branch}" "$4"
+  else
     create_branch "${branch}"
-    head="$(branch_head "${branch}")"
   fi
-  response="$(build_request "${REPO}" "${branch}" "${head}" "${headline}" "${path}" "${TAP_DIR}/${path}" |
+  response="$(build_request "${REPO}" "${branch}" "${parent}" "${headline}" "${path}" "${TAP_DIR}/${path}" |
     gh api graphql --input -)"
   log "committed ${path} to ${branch}: ${headline}"
   created_oid "${response}"

@@ -67,7 +67,7 @@ def serve_git():
             sys.stderr.write("gh: expectedHeadOid does not match\\n")
             sys.exit(1)
         ahead[branch] = ahead.get(branch, 0) + 1
-        heads[branch] = f"commit{{ahead[branch]}}"
+        heads[branch] = f"{{ahead[branch]:040x}}"
         sha = json.dumps({{"data": {{"createCommitOnBranch": {{"commit": {{"oid": heads[branch], "url": "u"}}}}}}}})
     elif call[:3] == ["gh", "pr", "create"]:
         sha = ""
@@ -107,6 +107,11 @@ sys.exit(rule["exit"])
 """
 
 
+def fake_oid(commits_ahead: int) -> str:
+    """The head oid `serve_git` gives a branch that is `commits_ahead` commits ahead of main."""
+    return f"{commits_ahead:040x}"
+
+
 class FakeBin:
     """Context manager owning the stub directory, its call log and its rules."""
 
@@ -136,7 +141,7 @@ class FakeBin:
     def serve_git(self, main_sha: str = "mainsha", branches: dict[str, int] | None = None) -> None:
         """Emulate GitHub's ref, commit and compare endpoints; `branches` maps name to commits ahead."""
         ahead = dict(branches or {})
-        heads = {"main": main_sha, **{branch: f"commit{count}" for branch, count in ahead.items()}}
+        heads = {"main": main_sha, **{branch: fake_oid(count) for branch, count in ahead.items()}}
         state = {"heads": heads, "ahead": ahead}
         (self.root / "git-state.json").write_text(json.dumps(state), encoding="utf-8")
         self.serving_git = True

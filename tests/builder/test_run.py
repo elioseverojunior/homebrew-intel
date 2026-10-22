@@ -92,7 +92,7 @@ class BuildLoopTest(RunTest):
         builds = [["z3", "4.13.0", str(bottles / "z3")], ["llvm", "19.1.0", str(bottles / "llvm")]]
         self.assertEqual(self.stub_argvs("build-formula.sh"), builds)
         commits = [[self.branch, "z3", "z3: add 4.13.0 sequoia bottle"]]
-        commits += [[self.branch, "llvm", "llvm: add 19.1.0 sequoia bottle"]]
+        commits += [[self.branch, "llvm", "llvm: add 19.1.0 sequoia bottle", commit_oid("z3")]]
         self.assertEqual(self.stub_argvs("commit-formula.sh"), commits)
         summary = str(self.tap / ".builder" / "summary.md")
         self.assertEqual(self.stub_argvs("open-pr.sh"), [[self.branch, commit_oid("llvm"), summary]])
@@ -202,6 +202,17 @@ class BuildLoopTest(RunTest):
         self.assertTrue(victim.is_dir())
         self.assertEqual(self.built(), ["lz4"])
         self.assertIn("invalid formula name", result.stderr)
+
+    def test_refused_commit_keeps_the_chain_on_the_last_own_commit(self):
+        # commit-formula.sh refuses lz4 (say, after a foreign push); xz still chains on z3.
+        self.configure(plan="z3 4.13.0\nlz4 1.10.0\nxz 5.6.3\n", commit_fail=["lz4"])
+        result = self.run_script()
+        self.assertEqual(result.returncode, 1)
+        parents = [argv[3:] for argv in self.stub_argvs("commit-formula.sh")]
+        self.assertEqual(parents, [[], [commit_oid("z3")], [commit_oid("z3")]])
+        self.assertIn("- lz4 1.10.0: bottled, but the commit failed", self.summary())
+        summary = str(self.tap / ".builder" / "summary.md")
+        self.assertEqual(self.stub_argvs("open-pr.sh"), [[self.branch, commit_oid("xz"), summary]])
 
     def test_open_pr_failure_fails_the_run(self):
         # open-pr.sh exits 1 when the branch head is not the run's last commit.

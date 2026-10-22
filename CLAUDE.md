@@ -128,8 +128,12 @@ rebuilds `reports/` from a fresh API snapshot plus local git history, taps and
   them with the `bottle-builder` check run, and opens one pull request with
   squash auto-merge, which merges after the five required checks
   (`lint-and-test`, `tap-syntax`, `drift`, `pour-test`, `verify-bot-pr`).
-  If the branch head is not the run's own last commit, the run attests
-  nothing, leaves the pull request to the owner and fails.
+  Each commit chains on the run's previous one (the first creates the
+  branch), so a commit pushed by anyone else is never built upon; if the
+  branch head is not the run's own last commit, the run attests nothing,
+  leaves the pull request to the owner and fails. Re-running the same
+  workflow run fails at its first commit because its branch already exists;
+  dispatch a new run instead.
 - After bottling, the builder uninstalls the `--build-bottle` keg on the
   host and pours the new bottle, since a keg built with `--build-bottle`
   keeps that option and would rebuild from source on `reinstall`/`upgrade`.

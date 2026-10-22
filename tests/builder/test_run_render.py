@@ -11,7 +11,7 @@ class RenderCommitTest(RunTest):
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stderr)
         commits = [[self.branch, "xz", f"xz: update from core {short}"]]
-        commits += [[self.branch, "lz4", "lz4: add 1.10.1 sequoia bottle"]]
+        commits += [[self.branch, "lz4", "lz4: add 1.10.1 sequoia bottle", commit_oid("xz")]]
         self.assertEqual(self.stub_argvs("commit-formula.sh"), commits)
 
     def test_render_commit_happens_when_nothing_builds(self):
