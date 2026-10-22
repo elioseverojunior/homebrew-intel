@@ -40,6 +40,10 @@ class BuildFormulaTest(unittest.TestCase):
         out = tempfile.TemporaryDirectory()
         self.addCleanup(out.cleanup)
         self.out = Path(out.name).resolve()
+        cache = tempfile.TemporaryDirectory()
+        self.addCleanup(cache.cleanup)
+        self.cache = Path(cache.name)
+        self.marker = self.cache / "pending-restore"
 
     def installed(self, tap: str) -> None:
         self.fake.respond(*INFO, stdout=installed_from(tap))
@@ -47,8 +51,11 @@ class BuildFormulaTest(unittest.TestCase):
     def argv(self, name: str = "lz4", version: str = "1.10.0") -> list[str]:
         return ["bash", str(SCRIPT), name, version, str(self.out)]
 
+    def environment(self) -> dict[str, str]:
+        return {**self.fake.environment(), "BUILDER_CACHE": str(self.cache)}
+
     def run_script(self, name: str = "lz4", version: str = "1.10.0") -> subprocess.CompletedProcess:
-        env = self.fake.environment()
+        env = self.environment()
         return subprocess.run(self.argv(name, version), env=env, capture_output=True, text=True, check=False)
 
     def wait_for_call(self, argv: list[str]) -> None:
@@ -131,7 +138,7 @@ class BuildFormulaTest(unittest.TestCase):
         self.fake.respond(*BUILD, sleep=1)
         self.fake.respond(*RESTORE_CORE, sleep=1)
         # Like a cancelled Actions job: SIGINT, then SIGTERM, to the whole group.
-        env = self.fake.environment()
+        env = self.environment()
         process = subprocess.Popen(self.argv(), env=env, stderr=subprocess.DEVNULL, start_new_session=True)
         self.wait_for_call(BUILD)
         os.killpg(process.pid, signal.SIGINT)
@@ -163,6 +170,47 @@ class BuildFormulaTest(unittest.TestCase):
 
     def test_rejects_bad_arguments(self):
         argv = ["bash", str(SCRIPT), "../lz4", "1.10.0", str(self.out)]
-        result = subprocess.run(argv, env=self.fake.environment(), capture_output=True, text=True, check=False)
+        result = subprocess.run(argv, env=self.environment(), capture_output=True, text=True, check=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.fake.argvs(), [])
+
+    def test_pending_restore_marker_lives_while_the_keg_is_missing(self):
+        self.installed(TAP)
+        self.fake.respond(*BUILD, sleep=1)
+        process = subprocess.Popen(self.argv(), env=self.environment(), stderr=subprocess.DEVNULL)
+        self.wait_for_call(BUILD)
+        self.assertEqual(self.marker.read_text(encoding="utf-8"), f"{TAP}/lz4\n")
+        self.assertEqual(process.wait(timeout=20), 0)
+        self.assertFalse(self.marker.exists())
+
+    def test_pending_restore_marker_removed_after_restore(self):
+        self.installed("homebrew/core")
+        self.fake.fail(*BUILD)
+        self.assertEqual(self.run_script().returncode, 1)
+        self.assertEqual(self.fake.argvs()[-1], RESTORE_CORE)
+        self.assertFalse(self.marker.exists())
+
+    def test_pending_restore_marker_kept_when_restore_fails(self):
+        self.installed(TAP)
+        self.fake.fail(*BUILD)
+        self.fake.fail(*RESTORE_TAP)
+        self.fake.fail(*RESTORE_CORE)
+        result = self.run_script()
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(self.marker.read_text(encoding="utf-8"), f"{TAP}/lz4\n")
+        self.assertIn("reinstall it by hand", result.stderr)
+
+    def test_no_marker_when_nothing_was_installed(self):
+        self.fake.respond(*INFO, stdout=json.dumps({"formulae": [], "casks": []}))
+        self.fake.fail(*BUILD)
+        self.assertEqual(self.run_script().returncode, 1)
+        self.assertFalse(self.marker.exists())
+
+    def test_refuses_while_another_restore_is_pending(self):
+        self.installed("homebrew/core")
+        self.marker.write_text("zstd\n", encoding="utf-8")
+        result = self.run_script()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("zstd is still uninstalled", result.stderr)
+        self.assertEqual(self.marker.read_text(encoding="utf-8"), "zstd\n")
+        self.assertNotIn(UNINSTALL, self.fake.argvs())

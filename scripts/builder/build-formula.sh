@@ -8,18 +8,15 @@ set -Eeuo pipefail
 # uninstalled first. From then on, any failure or interruption removes the
 # half-built keg and reinstalls the recorded one (same full name, core as a
 # fallback) before exiting non-zero, so /usr/local is never left without it.
+# A pending-restore marker (see keg.sh) covers a kill during that restore.
 # Must stay compatible with macOS /bin/bash 3.2.
 
 readonly TAP="elioseverojunior/intel"
 readonly REPO="elioseverojunior/homebrew-intel"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly script_dir
-
-# Host safeguards: never update, clean up, upgrade or rebuild dependents.
-export HOMEBREW_NO_AUTO_UPDATE=1
-export HOMEBREW_NO_INSTALL_CLEANUP=1
-export HOMEBREW_NO_INSTALL_UPGRADE=1
-export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
+# shellcheck source=scripts/builder/keg.sh
+source "${script_dir}/keg.sh"
 
 restore_name=""
 build_started=no
@@ -53,7 +50,9 @@ restore_previous_keg() {
   trap '' INT TERM
   set +e
   trap - EXIT
-  if [[ "${status}" -ne 0 ]]; then
+  if [[ "${status}" -eq 0 ]]; then
+    [[ -z "${restore_name}" ]] || rm -f "${pending_restore}"
+  else
     log "failed (exit ${status})"
     remove_half_built_keg
     reinstall_recorded_keg
@@ -67,15 +66,13 @@ remove_half_built_keg() {
   brew uninstall --ignore-dependencies "${name}"
 }
 
-# A tap name may now resolve to the just-failed formula (the run's checkout),
-# so a failed tap restore falls back to the core formula of the same name.
+# The marker stays when nothing could be reinstalled; the next run retries.
 reinstall_recorded_keg() {
   [[ -n "${restore_name}" ]] || return 0
   log "restoring ${restore_name}"
-  brew install "${restore_name}" && return 0
-  if [[ "${restore_name}" == */* ]]; then
-    log "could not restore ${restore_name}; falling back to core ${name}"
-    brew install "${name}" && return 0
+  if install_keg "${restore_name}"; then
+    rm -f "${pending_restore}"
+    return 0
   fi
   log "could not restore ${restore_name}; reinstall it by hand"
 }
@@ -85,16 +82,23 @@ validate_arguments() {
     log "usage: build-formula.sh <name> <pkg-version> <out-dir>"
     exit 2
   fi
-  if [[ ! "$1" =~ ^[a-z0-9][a-z0-9@._+-]*$ || ! "$2" =~ ^[0-9A-Za-z][0-9A-Za-z._+-]*$ ]]; then
+  if [[ ! "$1" =~ ${NAME_PATTERN} || ! "$2" =~ ^[0-9A-Za-z][0-9A-Za-z._+-]*$ ]]; then
     log "invalid formula name or version: '$1' '$2'"
     exit 2
   fi
 }
 
-# Uninstalls the installed keg, if any, after recording it for the restore.
+# Uninstalls the installed keg, if any, after recording it for the restore
+# here and in the pending-restore marker. The marker holds one keg, so an
+# earlier keg whose restore failed blocks every build until it is back.
 uninstall_previous_keg() {
+  if [[ -f "${pending_restore}" ]]; then
+    log "refusing to build: $(cat "${pending_restore}") is still uninstalled (${pending_restore})"
+    exit 1
+  fi
   restore_name="$(installed_full_name "${name}")"
   if [[ -n "${restore_name}" ]]; then
+    write_atomically "${pending_restore}" "${restore_name}"
     log "uninstalling ${restore_name}; it is restored if the build fails"
     brew uninstall --ignore-dependencies "${name}"
   fi
