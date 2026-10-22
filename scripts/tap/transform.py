@@ -8,7 +8,9 @@ BOTTLE_MARKER = "  # bottle block: written by brew pr-pull"
 
 _BOTTLE_START = "  bottle do"
 _BOTTLE_END = "  end"
-_HEADER_PATTERN = re.compile(r"# Generated from Homebrew/homebrew-core@(\S+) by scripts/tap/render\.py; do not edit\.")
+_HEADER_PATTERN = re.compile(
+    r"# Generated from Homebrew/homebrew-core@([0-9a-f]{40}) by scripts/tap/render\.py; do not edit\."
+)
 
 
 class TransformError(ValueError):

@@ -33,7 +33,7 @@ def apply_patch(text: str, patch: str, *, name: str) -> str:
         source.write_text(text, encoding="utf-8")
         patch_file.write_text(patch, encoding="utf-8")
         result = subprocess.run(
-            ["patch", "--batch", "--forward", "--silent", "-o", str(output), str(source), str(patch_file)],
+            ["patch", "--batch", "--fuzz=0", "--forward", "--silent", "-o", str(output), str(source), str(patch_file)],
             check=False,
             capture_output=True,
             text=True,

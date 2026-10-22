@@ -50,12 +50,12 @@ def formula_files(tap_dir: Path) -> list[Path]:
     return sorted((tap_dir / "Formula").glob("**/*.rb"))
 
 
-def read_patch(tap_dir: Path, name: str) -> str:
+def read_patch(tap_dir: Path, name: str) -> str | None:
     path = patch_path(tap_dir, name)
-    if not path.is_file():
-        msg = f"patched formula requires {path.relative_to(tap_dir)}"
-        raise ConfigError(msg)
-    return path.read_text(encoding="utf-8")
+    if path.is_file():
+        return path.read_text(encoding="utf-8")
+    print(f"render: {name}: no {path.relative_to(tap_dir)} yet; rendered unpatched", file=sys.stderr)
+    return None
 
 
 def existing_bottle(path: Path) -> str | None:

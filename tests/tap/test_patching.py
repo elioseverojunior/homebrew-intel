@@ -44,6 +44,13 @@ class PatchingTest(unittest.TestCase):
             apply_patch(conflicting, patch, name="podman")
         self.assertIn("podman", str(context.exception))
 
+    def test_shifted_context_is_not_fuzzed(self) -> None:
+        original = _formula()
+        patch = make_patch(original, _formula(arch_line=False), PATH)
+        edited_context = original.replace('  desc "Tool"\n', '  desc "Other tool"\n')
+        with self.assertRaises(PatchError):
+            apply_patch(edited_context, patch, name="x")
+
     def test_requires_trailing_newline(self) -> None:
         with self.assertRaises(ValueError):
             make_patch("a", "b\n", PATH)

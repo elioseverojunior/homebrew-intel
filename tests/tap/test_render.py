@@ -1,5 +1,6 @@
 import unittest
 
+import drift
 import render
 from transform import TAP, apply_bottle
 
@@ -39,12 +40,21 @@ class RenderTest(RenderTestCase):
         self.assertIn("llvm", stderr)
         self.assertEqual(self.tree(), before)
 
-    def test_missing_patch_file_writes_nothing(self):
-        self.enable(f'[formula.llvm]\nkind = "patched"\nbase = "{self.first}"\n')
+    def test_render_patched_without_patch_bootstraps(self):
+        self.enable(f'[formula.lz4]\nkind = "patched"\nbase = "{self.first}"\n')
         code, _, stderr = self.run_render()
-        self.assertEqual(code, 1)
-        self.assertIn("patches/llvm.patch", stderr)
-        self.assertFalse((self.tap / "Formula").exists())
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr, "render: lz4: no patches/lz4.patch yet; rendered unpatched\n")
+        unpatched = self.read("Formula/l/lz4.rb")
+        self.assertTrue(unpatched.startswith(f"{HEADER_PREFIX}{self.first} "))
+        self.assertFalse((self.tap / "patches/lz4.patch").exists())
+        self.assertEqual(drift.check(self.tap, self.core), [])
+        self.write(self.tap / "Formula/l/lz4.rb", unpatched.replace("  # filler 5\n", ""))
+        self.assertEqual(self.run_render("--make-patch", "lz4")[0], 0)
+        code, _, stderr = self.run_render()
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertNotIn("# filler 5", self.read("Formula/l/lz4.rb"))
+        self.assertEqual(drift.check(self.tap, self.core), [])
 
     def test_print_order(self):
         self.enable('[formula.llvm]\nkind = "generated"\n')

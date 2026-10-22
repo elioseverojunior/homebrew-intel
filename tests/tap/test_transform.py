@@ -55,6 +55,11 @@ class HeaderTest(unittest.TestCase):
         with self.assertRaises(TransformError):
             parse_header(FORMULA)
 
+    def test_non_sha_commit_is_rejected(self):
+        for commit in ("--upload-pack=x", SHA[:7], SHA.upper(), SHA + "0"):
+            with self.subTest(commit=commit), self.assertRaises(TransformError):
+                parse_header(header(commit, "lz4"))
+
 
 class MarkBottleTest(unittest.TestCase):
     def test_marks_bottle_block(self):
