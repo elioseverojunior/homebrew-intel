@@ -27,6 +27,7 @@ TAP_DIR="${TAP_DIR:-$(cd "${script_dir}/../.." && pwd -P)}"
 export TAP_DIR
 readonly run_dir="${TAP_DIR}/.builder"
 readonly log_dir="${BUILDER_LOG_DIR:-${run_dir}/logs}"
+readonly last_commit_file="${run_dir}/last-commit"
 readonly core_url="${BUILDER_CORE_URL:-https://github.com/Homebrew/homebrew-core}"
 # The Taps link's original target, kept while the link is swapped. A run killed
 # with SIGKILL cannot restore the link; the next run reads it back from here.
@@ -253,8 +254,7 @@ render_and_commit() {
       git -C "${TAP_DIR}" checkout --quiet -- "${path}"
     elif ! planned "${name}"
     then
-      "${TAP_DIR}/scripts/builder/commit-formula.sh" "${branch}" "${name}" \
-        "${name}: update from core ${core_commit:0:7}"
+      commit_to_branch "${name}" "${name}: update from core ${core_commit:0:7}"
     fi
   done 3<<<"${changed}"
 }
@@ -314,6 +314,15 @@ open_issue() {
     log "warning: could not open an issue for ${name}"
 }
 
+# commit_to_branch <name> <headline>: commits the formula to the run branch and
+# records the commit it created in last_commit_file (a file, not a variable:
+# build_one runs this in a pipeline subshell). Its log lines go to stderr.
+# Explicit returns: callers use it as a condition, where errexit is off.
+commit_to_branch() {
+  "${TAP_DIR}/scripts/builder/commit-formula.sh" "${branch}" "$1" "$2" >"${last_commit_file}.tmp" || return $?
+  mv -f "${last_commit_file}.tmp" "${last_commit_file}"
+}
+
 build_one() {
   local name="$1" version="$2" log_file="${log_dir}/$1.log" bottle_dir="${run_dir}/bottles/$1"
   rm -rf "${bottle_dir}"
@@ -328,8 +337,8 @@ build_one() {
     open_issue "${name}" "${version}" "${log_file}"
     return 0
   fi
-  if ! "${TAP_DIR}/scripts/builder/commit-formula.sh" "${branch}" "${name}" "${name}: add ${version} sequoia bottle" 2>&1 |
-     tee -a "${log_file}"
+  # shellcheck disable=SC2310 # the pipeline's status is the condition by design
+  if ! commit_to_branch "${name}" "${name}: add ${version} sequoia bottle" 2>&1 | tee -a "${log_file}"
   then
     record_failed "${name}" "${version}" "bottled, but the commit failed"
     return 0
@@ -404,6 +413,19 @@ print_dry_run() {
   echo "open an issue in ${PRIVATE_REPO} per failure, and open the pull request"
 }
 
+# open-pr.sh attests and auto-merges the branch only if its head is still the
+# last commit this run created.
+open_pull_request() {
+  local last_commit
+  if [[ ! -f "${last_commit_file}" ]]
+  then
+    log "no commits in this run; no pull request"
+    return 0
+  fi
+  last_commit="$(tail -n 1 "${last_commit_file}")"
+  "${TAP_DIR}/scripts/builder/open-pr.sh" "${branch}" "${last_commit}" "${run_dir}/summary.md"
+}
+
 main() {
   parse_arguments "$@"
   # Nothing in a run reads stdin; children (brew, gh) get /dev/null.
@@ -420,6 +442,7 @@ main() {
     log "GH_TOKEN is required"
     exit 2
   fi
+  rm -f "${last_commit_file}"
   recover_pending_restore
   swap_taps_link
   set_origin_head
@@ -429,7 +452,7 @@ main() {
   build_all
   write_summary
   printf 'Built:\n%sFailed:\n%sSkipped:\n%s' "${built_report}" "${failed_report}" "${skipped_report}"
-  "${TAP_DIR}/scripts/builder/open-pr.sh" "${branch}" "${run_dir}/summary.md"
+  open_pull_request
   [[ -z "${failed_report}" ]]
 }
 

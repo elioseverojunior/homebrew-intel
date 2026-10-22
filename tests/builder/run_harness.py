@@ -1,5 +1,6 @@
 """Shared harness for run.sh tests: script stubs, a temp tap and core repo."""
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -19,13 +20,19 @@ STUBBED += tuple(f"scripts/builder/{name}.sh" for name in ("build-formula", "com
 # where the Taps symlink pointed at that moment; stubs.json decides the plan,
 # the files render.py rewrites, and which builds fail or stall.
 STUB = """#!{python}
-import json, os, sys, time
+import hashlib, json, os, sys, time
 from pathlib import Path
 
 root = Path({root!r})
 config = json.loads((root / "stubs.json").read_text(encoding="utf-8"))
 script, args = os.path.basename(sys.argv[0]), sys.argv[1:]
 link = root / "Taps" / "homebrew-intel"
+
+
+def oid(name):
+    return hashlib.sha1(name.encode()).hexdigest()
+
+
 names = ("TAP_DIR", "HOMEBREW_INTEL_DATA", "HOMEBREW_CORE_REPO")
 entry = {{
     "script": script,
@@ -51,12 +58,20 @@ elif script == "build-formula.sh":
     if args[0] in config["fail"]:
         print(f"error: {{args[0]}} does not compile")
         sys.exit(1)
-elif script == "commit-formula.sh" and args[1] in config.get("commit_fail", []):
-    print(f"error: cannot commit {{args[1]}}", file=sys.stderr)
-    sys.exit(1)
+elif script == "commit-formula.sh":
+    if args[1] in config.get("commit_fail", []):
+        print(f"error: cannot commit {{args[1]}}", file=sys.stderr)
+        sys.exit(1)
+    print(f"committed {{args[1]}}", file=sys.stderr)
+    print(oid(args[1]))
 elif script == "open-pr.sh" and config.get("open_pr_fail"):
     sys.exit(1)
 """
+
+
+def commit_oid(name: str) -> str:
+    """The commit oid the commit-formula.sh stub prints for formula `name`."""
+    return hashlib.sha1(name.encode()).hexdigest()  # noqa: S324 - a fake oid, not security
 
 
 def git(*args: str) -> str:

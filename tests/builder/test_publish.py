@@ -19,7 +19,10 @@ UNAUTHORIZED = {
 HEADLINE = "lz4: add 1.10.0 sequoia bottle"
 PR_URL = f"https://github.com/{REPO}/pull/9"
 AUTO_MERGE = ["gh", "pr", "merge", PR_URL, "--auto", "--squash", "-R", REPO]
-CHECK_RUN = ["gh", "api", f"{API}check-runs", "-f", "name=bottle-builder", "-f", "head_sha=commit2"]
+EXPECTED = "e" * 40
+FOREIGN = "f" * 40
+CHECK_RUN = ["gh", "api", f"{API}check-runs", "-f", "name=bottle-builder", "-f", f"head_sha={EXPECTED}"]
+CHECK_RUN += ["-f", f"external_id={EXPECTED}"]
 CHECK_RUN += ["-f", "status=completed", "-f", "conclusion=success"]
 CHECK_RUN += ["-f", "output[title]=Intel bottle builder"]
 CHECK_RUN += ["-f", "output[summary]=Bottles built and committed by the private Intel builder."]
@@ -71,6 +74,12 @@ class CommitFormulaTest(PublishTest):
         self.assertEqual(addition["path"], "Formula/l/lz4.rb")
         self.assertEqual(base64.b64decode(addition["contents"]), (self.tap / "Formula/l/lz4.rb").read_bytes())
 
+    def test_prints_the_created_commit_oid(self):
+        self.fake.serve_git("abc123")
+        first, second = self.commit("lz4"), self.commit("zstd", "zstd: add 1.5 sequoia bottle")
+        self.assertEqual((first.returncode, second.returncode), (0, 0), first.stderr + second.stderr)
+        self.assertEqual((first.stdout, second.stdout), ("commit1\n", "commit2\n"))
+
     def test_second_commit_uses_new_head(self):
         self.fake.serve_git("abc123")
         self.assertEqual(self.commit("lz4").returncode, 0)
@@ -108,47 +117,78 @@ class OpenPullRequestTest(PublishTest):
         self.summary = self.tap / "summary.md"
         self.summary.write_text("Bottled lz4\n", encoding="utf-8")
 
-    def open_pr(self) -> subprocess.CompletedProcess:
-        return self.run_script("open-pr.sh", BRANCH, str(self.summary))
+    def serve_branch(self, head: str = EXPECTED) -> None:
+        """The branch exists two commits ahead of main, its remote head at `head`."""
+        self.fake.serve_git(branches={BRANCH: 2})
+        state_file = self.fake.root / "git-state.json"
+        state = self.fake.git_state()
+        state["heads"][BRANCH] = head
+        state_file.write_text(json.dumps(state), encoding="utf-8")
+
+    def pr_already_open(self) -> None:
+        list_prs = ["gh", "pr", "list", "-R", REPO, "--head", BRANCH, "--state", "open", "--json", "number"]
+        self.fake.respond(*list_prs, "--jq", "length", stdout="1\n")
+
+    def open_pr(self, expected: str = EXPECTED) -> subprocess.CompletedProcess:
+        return self.run_script("open-pr.sh", BRANCH, expected, str(self.summary))
 
     def created(self) -> list[list[str]]:
         return [argv for argv in self.fake.argvs() if argv[:3] == ["gh", "pr", "create"]]
 
-    def test_open_pr_args_then_auto_merge(self):
-        self.fake.serve_git(branches={BRANCH: 2})
+    def called(self, prefix: list[str]) -> bool:
+        return any(argv[: len(prefix)] == prefix for argv in self.fake.argvs())
+
+    def test_matching_head_is_attested_then_opened_with_auto_merge(self):
+        self.serve_branch()
         self.fake.respond("gh", "pr", "create", stdout=f"{PR_URL}\n")
         result = self.open_pr()
         self.assertEqual(result.returncode, 0, result.stderr)
         create = ["gh", "pr", "create", "-R", REPO, "--base", "main", "--head", BRANCH]
         create += ["--title", "bottles: 2026-10-22 run 7", "--body-file", str(self.summary)]
-        self.assertEqual(self.fake.argvs()[-2:], [create, AUTO_MERGE])
+        argvs = self.fake.argvs()
+        self.assertLess(argvs.index(CHECK_RUN), argvs.index(create))
+        self.assertEqual(argvs[-2:], [create, AUTO_MERGE])
         self.assertEqual(result.stdout, f"{PR_URL}\n")
 
-    def test_check_run_marks_the_head_before_the_pr(self):
-        self.fake.serve_git(branches={BRANCH: 2})
+    def test_foreign_head_gets_no_check_run_nor_auto_merge(self):
+        self.serve_branch(FOREIGN)
+        self.fake.respond("gh", "pr", "create", stdout=f"{PR_URL}\n")
+        result = self.open_pr()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(f"warning: {BRANCH} head {FOREIGN} is not the builder's {EXPECTED}", result.stderr)
+        self.assertEqual(len(self.created()), 1)
+        self.assertFalse(self.called(CHECK_RUN[:3]))
+        self.assertFalse(self.called(["gh", "pr", "merge"]))
+
+    def test_existing_pr_with_matching_head_is_attested_and_auto_merged(self):
+        self.serve_branch()
+        self.pr_already_open()
         result = self.open_pr()
         self.assertEqual(result.returncode, 0, result.stderr)
-        argvs = [argv[:3] for argv in self.fake.argvs()]
+        self.assertIn("already open", result.stderr)
+        self.assertEqual(self.created(), [])
         self.assertIn(CHECK_RUN, self.fake.argvs())
-        self.assertLess(argvs.index(CHECK_RUN[:3]), argvs.index(["gh", "pr", "create"]))
+        self.assertEqual(self.fake.argvs()[-1], ["gh", "pr", "merge", BRANCH, "--auto", "--squash", "-R", REPO])
+
+    def test_existing_pr_with_foreign_head_is_left_alone(self):
+        self.serve_branch(FOREIGN)
+        self.pr_already_open()
+        result = self.open_pr()
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(self.created(), [])
+        self.assertFalse(self.called(CHECK_RUN[:3]))
+        self.assertFalse(self.called(["gh", "pr", "merge"]))
 
     def test_check_run_failure_warns_and_still_opens_the_pr(self):
-        self.fake.serve_git(branches={BRANCH: 2})
+        self.serve_branch()
         self.fake.respond(*CHECK_RUN[:3], stderr="gh: Resource not accessible by integration (HTTP 403)\n", exit_code=1)
         result = self.open_pr()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("warning: could not create the bottle-builder check run", result.stderr)
         self.assertEqual(len(self.created()), 1)
 
-    def test_existing_open_pr_still_gets_the_check_run(self):
-        self.fake.serve_git(branches={BRANCH: 2})
-        list_prs = ["gh", "pr", "list", "-R", REPO, "--head", BRANCH, "--state", "open", "--json", "number"]
-        self.fake.respond(*list_prs, "--jq", "length", stdout="1\n")
-        self.assertEqual(self.open_pr().returncode, 0)
-        self.assertIn(CHECK_RUN, self.fake.argvs())
-
     def test_auto_merge_failure_only_warns(self):
-        self.fake.serve_git(branches={BRANCH: 2})
+        self.serve_branch()
         self.fake.respond("gh", "pr", "create", stdout=f"{PR_URL}\n")
         self.fake.respond(*AUTO_MERGE, stderr="auto-merge is not allowed for this repository\n", exit_code=1)
         result = self.open_pr()
@@ -157,10 +197,10 @@ class OpenPullRequestTest(PublishTest):
         self.assertIn(f"warning: could not enable auto-merge on {PR_URL}", result.stderr)
 
     def test_failed_create_does_not_auto_merge(self):
-        self.fake.serve_git(branches={BRANCH: 2})
+        self.serve_branch()
         self.fake.fail("gh", "pr", "create")
         self.assertNotEqual(self.open_pr().returncode, 0)
-        self.assertNotIn(AUTO_MERGE[:3], [argv[:3] for argv in self.fake.argvs()])
+        self.assertFalse(self.called(["gh", "pr", "merge"]))
 
     def test_open_pr_noop_without_commits(self):
         for branches in ({}, {BRANCH: 0}):
@@ -170,27 +210,20 @@ class OpenPullRequestTest(PublishTest):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn("nothing to open", result.stderr)
                 self.assertEqual(self.created(), [])
-                self.assertNotIn(AUTO_MERGE[:3], [argv[:3] for argv in self.fake.argvs()])
-                self.assertNotIn(CHECK_RUN[:3], [argv[:3] for argv in self.fake.argvs()])
+                self.assertFalse(self.called(["gh", "pr", "merge"]))
+                self.assertFalse(self.called(CHECK_RUN[:3]))
 
     def test_non_404_compare_failure_aborts(self):
-        self.fake.serve_git(branches={BRANCH: 2})
+        self.serve_branch()
         self.fake.respond("gh", "api", f"{API}compare/main...{BRANCH}", **UNAUTHORIZED)
         self.assertNotEqual(self.open_pr().returncode, 0)
         self.assertEqual(self.created(), [])
 
-    def test_existing_open_pr_is_a_noop(self):
-        self.fake.serve_git(branches={BRANCH: 2})
-        list_prs = ["gh", "pr", "list", "-R", REPO, "--head", BRANCH, "--state", "open", "--json", "number"]
-        self.fake.respond(*list_prs, "--jq", "length", stdout="1\n")
-        result = self.open_pr()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("already open", result.stderr)
-        self.assertEqual(self.created(), [])
-
     def test_rejects_bad_arguments(self):
-        result = self.run_script("open-pr.sh", "main", str(self.summary))
-        self.assertNotEqual(result.returncode, 0)
+        for args in (("main", EXPECTED), (BRANCH, "commit2"), (BRANCH, EXPECTED.upper())):
+            result = self.run_script("open-pr.sh", *args, str(self.summary))
+            self.assertEqual(result.returncode, 2, args)
+        self.assertEqual(self.run_script("open-pr.sh", BRANCH, str(self.summary)).returncode, 2)
         self.assertEqual(self.fake.argvs(), [])
 
 

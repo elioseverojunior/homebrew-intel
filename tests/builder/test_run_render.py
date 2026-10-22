@@ -1,6 +1,6 @@
 import unittest
 
-from tests.builder.run_harness import RunTest, git
+from tests.builder.run_harness import RunTest, commit_oid, git
 
 
 class RenderCommitTest(RunTest):
@@ -18,7 +18,8 @@ class RenderCommitTest(RunTest):
         self.configure(plan="", render={"Formula/z/z3.rb": "z3 v2\n"})
         self.assertEqual(self.run_script().returncode, 0)
         self.assertEqual([argv[1] for argv in self.stub_argvs("commit-formula.sh")], ["z3"])
-        self.assertEqual(len(self.stub_argvs("open-pr.sh")), 1)
+        summary = str(self.tap / ".builder" / "summary.md")
+        self.assertEqual(self.stub_argvs("open-pr.sh"), [[self.branch, commit_oid("z3"), summary]])
 
     def test_plan_is_computed_after_render(self):
         self.configure(plan="", render={"Formula/z/z3.rb": "z3 v2\n"})

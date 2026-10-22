@@ -5,7 +5,7 @@ import time
 import unittest
 from pathlib import Path
 
-from tests.builder.run_harness import PRIVATE_REPO, SCRIPT, RunTest, git, make_repo
+from tests.builder.run_harness import PRIVATE_REPO, SCRIPT, RunTest, commit_oid, git, make_repo
 
 
 class SymlinkTest(RunTest):
@@ -95,7 +95,9 @@ class BuildLoopTest(RunTest):
         commits += [[self.branch, "llvm", "llvm: add 19.1.0 sequoia bottle"]]
         self.assertEqual(self.stub_argvs("commit-formula.sh"), commits)
         summary = str(self.tap / ".builder" / "summary.md")
-        self.assertEqual(self.stub_argvs("open-pr.sh"), [[self.branch, summary]])
+        self.assertEqual(self.stub_argvs("open-pr.sh"), [[self.branch, commit_oid("llvm"), summary]])
+        log = (self.tap / ".builder" / "logs" / "llvm.log").read_text(encoding="utf-8")
+        self.assertIn("committed llvm", log)
         self.assertIn("- llvm 19.1.0", self.summary())
         self.assertEqual(self.issues(), [])
 
@@ -143,7 +145,9 @@ class BuildLoopTest(RunTest):
         self.assertIn("error: z3 does not compile", log.read_text(encoding="utf-8"))
         self.assertIn("- z3 4.13.0", self.summary())
         self.assertIn("- llvm: dependency z3 did not build", self.summary())
-        self.assertEqual(len(self.stub_argvs("open-pr.sh")), 1)
+        # Nothing was committed, so there is no branch and no pull request.
+        self.assertEqual(self.stub_argvs("open-pr.sh"), [])
+        self.assertIn("no commits in this run", result.stderr)
 
     def test_skip_cascades_through_skipped_dependencies(self):
         self.configure(plan="z3 4.13.0\nllvm 19.1.0 z3\nrust 1.90.0 llvm\n", fail=("z3",))
@@ -198,6 +202,14 @@ class BuildLoopTest(RunTest):
         self.assertTrue(victim.is_dir())
         self.assertEqual(self.built(), ["lz4"])
         self.assertIn("invalid formula name", result.stderr)
+
+    def test_open_pr_failure_fails_the_run(self):
+        # open-pr.sh exits 1 when the branch head is not the run's last commit.
+        self.configure(plan="lz4 1.10.0\n", open_pr_fail=True)
+        result = self.run_script()
+        self.assertNotEqual(result.returncode, 0)
+        summary = str(self.tap / ".builder" / "summary.md")
+        self.assertEqual(self.stub_argvs("open-pr.sh"), [[self.branch, commit_oid("lz4"), summary]])
 
     def test_commit_failure_after_build_is_a_failure(self):
         self.configure(plan="z3 4.13.0\nllvm 19.1.0 z3\n", commit_fail=["z3"], open_pr_fail=True)

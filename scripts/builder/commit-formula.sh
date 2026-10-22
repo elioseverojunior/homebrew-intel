@@ -7,7 +7,8 @@ set -Eeuo pipefail
 # Env: GH_TOKEN (App token), TAP_DIR (the run's tap checkout).
 # The branch is created from main's head on first use; every commit then goes
 # through GraphQL createCommitOnBranch with the branch's current head as
-# expectedHeadOid, so later commits build on the earlier ones.
+# expectedHeadOid, so later commits build on the earlier ones. Prints the oid
+# of the commit it created on stdout (run.sh hands the last one to open-pr.sh).
 
 readonly REPO="elioseverojunior/homebrew-intel"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -71,6 +72,14 @@ print(json.dumps({"query": mutation, "variables": {"input": change}}))
 ' "$@"
 }
 
+# Prints the created commit's oid from the createCommitOnBranch response.
+created_oid() {
+  python3 -c '
+import json, sys
+print(json.loads(sys.argv[1])["data"]["createCommitOnBranch"]["commit"]["oid"])
+' "$1"
+}
+
 formula_path() {
   PYTHONPATH="${script_dir}/../tap" python3 -c \
     'import sys; from core_source import formula_relpath; print(formula_relpath(sys.argv[1]))' "$1"
@@ -78,7 +87,7 @@ formula_path() {
 
 main() {
   validate_arguments "$@"
-  local branch="$1" name="$2" headline="$3" path head
+  local branch="$1" name="$2" headline="$3" path head response
   path="$(formula_path "${name}")"
   if [[ ! -f "${TAP_DIR}/${path}" ]]
   then
@@ -91,9 +100,10 @@ main() {
     create_branch "${branch}"
     head="$(branch_head "${branch}")"
   fi
-  build_request "${REPO}" "${branch}" "${head}" "${headline}" "${path}" "${TAP_DIR}/${path}" |
-    gh api graphql --input - >/dev/null
+  response="$(build_request "${REPO}" "${branch}" "${head}" "${headline}" "${path}" "${TAP_DIR}/${path}" |
+    gh api graphql --input -)"
   log "committed ${path} to ${branch}: ${headline}"
+  created_oid "${response}"
 }
 
 main "$@"
