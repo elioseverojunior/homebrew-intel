@@ -1,6 +1,9 @@
 import json
+import os
+import signal
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -15,6 +18,9 @@ ASSET = "lz4-1.10.0.sequoia.bottle.tar.gz"
 BOTTLE_JSON = "lz4--1.10.0.sequoia.bottle.json"
 INFO = ["brew", "info", "--json=v2", "--installed", "lz4"]
 BUILD = ["brew", "install", "--build-bottle", f"{TAP}/lz4"]
+UNINSTALL = ["brew", "uninstall", "--ignore-dependencies", "lz4"]
+RESTORE_CORE = ["brew", "install", "lz4"]
+RESTORE_TAP = ["brew", "install", f"{TAP}/lz4"]
 SAFEGUARDS = {
     "HOMEBREW_NO_AUTO_UPDATE": "1",
     "HOMEBREW_NO_INSTALL_CLEANUP": "1",
@@ -38,9 +44,19 @@ class BuildFormulaTest(unittest.TestCase):
     def installed(self, tap: str) -> None:
         self.fake.respond(*INFO, stdout=installed_from(tap))
 
-    def run_script(self) -> subprocess.CompletedProcess:
-        argv = ["bash", str(SCRIPT), "lz4", "1.10.0", str(self.out)]
-        return subprocess.run(argv, env=self.fake.environment(), capture_output=True, text=True, check=False)
+    def argv(self, name: str = "lz4", version: str = "1.10.0") -> list[str]:
+        return ["bash", str(SCRIPT), name, version, str(self.out)]
+
+    def run_script(self, name: str = "lz4", version: str = "1.10.0") -> subprocess.CompletedProcess:
+        env = self.fake.environment()
+        return subprocess.run(self.argv(name, version), env=env, capture_output=True, text=True, check=False)
+
+    def wait_for_call(self, argv: list[str]) -> None:
+        deadline = time.monotonic() + 10
+        while argv not in self.fake.argvs():
+            if time.monotonic() > deadline:
+                self.fail(f"{argv} was never called")
+            time.sleep(0.05)
 
     def test_happy_path_call_order(self):
         self.installed("homebrew/core")
@@ -82,26 +98,55 @@ class BuildFormulaTest(unittest.TestCase):
         self.installed("homebrew/core")
         self.fake.fail(*BUILD)
         result = self.run_script()
-        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.returncode, 1)
         argvs = self.fake.argvs()
-        self.assertEqual(argvs[argvs.index(BUILD) + 1 :][-1], ["brew", "install", "lz4"])
+        self.assertEqual(argvs[-2:], [UNINSTALL, RESTORE_CORE])
         self.assertNotIn(["brew", "test", f"{TAP}/lz4"], argvs)
 
     def test_upload_failure_restores_tap_keg(self):
         self.installed(TAP)
         self.fake.fail("gh", "release", "upload")
         result = self.run_script()
-        self.assertNotEqual(result.returncode, 0)
-        argvs = self.fake.argvs()
-        self.assertEqual(argvs[-2], ["brew", "uninstall", "--ignore-dependencies", "lz4"])
-        self.assertEqual(argvs[-1], ["brew", "install", f"{TAP}/lz4"])
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(self.fake.argvs()[-2:], [UNINSTALL, RESTORE_TAP])
 
-    def test_not_installed_skips_uninstall_and_restore(self):
-        self.fake.respond(*INFO, stdout="Error: No such keg: /usr/local/Cellar/lz4\n", exit_code=1)
+    def test_failed_tap_restore_falls_back_to_core(self):
+        self.installed(TAP)
         self.fake.fail(*BUILD)
+        self.fake.fail(*RESTORE_TAP)
         result = self.run_script()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(self.fake.argvs(), [INFO, BUILD])
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(self.fake.argvs()[-3:], [UNINSTALL, RESTORE_TAP, RESTORE_CORE])
+        self.assertIn("falling back", result.stderr)
+
+    def test_not_installed_removes_half_built_keg_without_restore(self):
+        self.fake.respond(*INFO, stdout="Error: No such keg: /usr/local/Cellar/lz4\n", exit_code=1)
+        self.fake.fail("brew", "test")
+        result = self.run_script()
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(self.fake.argvs(), [INFO, BUILD, ["brew", "test", f"{TAP}/lz4"], UNINSTALL])
+
+    def test_signals_cannot_interrupt_the_restore(self):
+        self.installed("homebrew/core")
+        self.fake.respond(*BUILD, sleep=1)
+        self.fake.respond(*RESTORE_CORE, sleep=1)
+        # Like a cancelled Actions job: SIGINT, then SIGTERM, to the whole group.
+        env = self.fake.environment()
+        process = subprocess.Popen(self.argv(), env=env, stderr=subprocess.DEVNULL, start_new_session=True)
+        self.wait_for_call(BUILD)
+        os.killpg(process.pid, signal.SIGINT)
+        self.wait_for_call(RESTORE_CORE)
+        os.killpg(process.pid, signal.SIGTERM)
+        self.assertNotEqual(process.wait(timeout=20), 0)
+        self.assertEqual(self.fake.argvs()[-2:], [UNINSTALL, RESTORE_CORE])
+        self.assertEqual(self.fake.finished()[-1], RESTORE_CORE)
+
+    def test_versioned_name_asset_is_url_decoded(self):
+        result = self.run_script("python@3.12", "3.12.7")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        upload = next(argv for argv in self.fake.argvs() if argv[:3] == ["gh", "release", "upload"])
+        self.assertEqual(upload[4], str(self.out / "python@3.12-3.12.7.sequoia.bottle.tar.gz"))
+        self.assertTrue((self.out / "python@3.12-3.12.7.sequoia.bottle.tar.gz").is_file())
 
     def test_empty_installed_list_skips_uninstall(self):
         self.fake.respond(*INFO, stdout=json.dumps({"formulae": [], "casks": []}))

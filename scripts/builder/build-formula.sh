@@ -5,9 +5,10 @@ set -Eeuo pipefail
 # Build, test, bottle, upload and merge one tap formula on the Intel host:
 #   build-formula.sh <name> <pkg-version> <out-dir>
 # `brew install --build-bottle` has no reinstall form, so an installed keg is
-# uninstalled first. From then on, any failure or interruption reinstalls the
-# recorded keg (same full name) before exiting non-zero, so /usr/local is never
-# left without it. Must stay compatible with macOS /bin/bash 3.2.
+# uninstalled first. From then on, any failure or interruption removes the
+# half-built keg and reinstalls the recorded one (same full name, core as a
+# fallback) before exiting non-zero, so /usr/local is never left without it.
+# Must stay compatible with macOS /bin/bash 3.2.
 
 readonly TAP="elioseverojunior/intel"
 readonly REPO="elioseverojunior/homebrew-intel"
@@ -44,17 +45,39 @@ for formula in json.loads(sys.stdin.read().strip() or "{}").get("formulae") or [
 ' "${name}" <<<"${info}"
 }
 
+# EXIT trap. A cancelled Actions job sends SIGINT and then SIGTERM, so further
+# signals are ignored (brew inherits that) and errexit is off: the restore must
+# run to the end whatever happens.
 restore_previous_keg() {
   local status=$?
+  trap '' INT TERM
+  set +e
   trap - EXIT
-  if [[ "${status}" -ne 0 && -n "${restore_name}" ]]; then
-    log "failed (exit ${status}); restoring ${restore_name}"
-    if [[ "${build_started}" = yes ]]; then
-      brew uninstall --ignore-dependencies "${name}" || true
-    fi
-    brew install "${restore_name}" || log "could not restore ${restore_name}; reinstall it by hand"
+  if [[ "${status}" -ne 0 ]]; then
+    log "failed (exit ${status})"
+    remove_half_built_keg
+    reinstall_recorded_keg
   fi
   exit "${status}"
+}
+
+remove_half_built_keg() {
+  [[ "${build_started}" = yes ]] || return 0
+  log "removing the half-built ${TAP}/${name}"
+  brew uninstall --ignore-dependencies "${name}"
+}
+
+# A tap name may now resolve to the just-failed formula (the run's checkout),
+# so a failed tap restore falls back to the core formula of the same name.
+reinstall_recorded_keg() {
+  [[ -n "${restore_name}" ]] || return 0
+  log "restoring ${restore_name}"
+  brew install "${restore_name}" && return 0
+  if [[ "${restore_name}" == */* ]]; then
+    log "could not restore ${restore_name}; falling back to core ${name}"
+    brew install "${name}" && return 0
+  fi
+  log "could not restore ${restore_name}; reinstall it by hand"
 }
 
 validate_arguments() {
@@ -83,14 +106,17 @@ build_and_test() {
   brew test "${TAP}/${name}"
 }
 
-# Prints "<local_filename> <filename>" of the bottle JSON's single tag.
+# Prints "<local_filename> <decoded filename>" of the bottle JSON's single tag.
 bottle_filenames() {
   python3 -c '
 import json, os, sys
+from urllib.parse import unquote
 document = json.load(open(sys.argv[1], encoding="utf-8"))
 (entry,) = document.values()
 (tag,) = entry["bottle"]["tags"].values()
-names = (tag["local_filename"], tag["filename"])
+# brew URL-encodes filename (python@3.12 -> python%403.12); GitHub serves the
+# asset under its decoded name, so that is the name to upload.
+names = (tag["local_filename"], unquote(tag["filename"]))
 if any(os.path.basename(n) != n or n.startswith(".") for n in names):
     sys.exit(f"unsafe bottle filename in {sys.argv[1]}")
 print(*names)
