@@ -7,9 +7,12 @@ set -Eeuo pipefail
 # Env: GH_TOKEN. The title comes from the branch name (bottle/<date>-<run>), so a
 # run that crosses midnight stays consistent. Does nothing when the branch is
 # missing, has no commits ahead of main, or already has an open pull request.
-# A new pull request gets auto-merge (squash) enabled; it merges once the
-# required checks, including verify-bot-pr, pass. If auto-merge cannot be
-# enabled the run still succeeds and the owner merges by hand.
+# The branch head first gets a successful `bottle-builder` check run, created
+# with the App token: verify-bot-pr trusts exactly that commit, so any later
+# push to the branch blocks auto-merge. A new pull request gets auto-merge
+# (squash) enabled; it merges once the required checks pass. If the check run
+# or auto-merge cannot be set up, the run still succeeds and the owner merges
+# by hand.
 
 readonly REPO="elioseverojunior/homebrew-intel"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -51,6 +54,29 @@ open_pull_requests() {
   gh pr list -R "${REPO}" --head "$1" --state open --json number --jq length
 }
 
+readonly CHECK_NAME="bottle-builder"
+
+create_check_run() {
+  gh api "repos/${REPO}/check-runs" -f "name=${CHECK_NAME}" -f "head_sha=$1" \
+    -f status=completed -f conclusion=success -f "output[title]=Intel bottle builder" \
+    -f "output[summary]=Bottles built and committed by the private Intel builder." >/dev/null
+}
+
+# Marks the branch head with the check run; a failure only warns (verify-bot-pr
+# then fails and auto-merge waits for the owner).
+mark_head_built() {
+  local head=""
+  # shellcheck disable=SC2310 # gh_lookup prints gh's error itself; any failure warns below
+  head="$(gh_lookup "repos/${REPO}/git/ref/heads/$1" --jq .object.sha)" || head=""
+  # shellcheck disable=SC2310 # a failed check run only warns
+  if [[ -n "${head}" ]] && create_check_run "${head}"
+  then
+    log "marked ${head} with the ${CHECK_NAME} check run"
+    return 0
+  fi
+  log "warning: could not create the ${CHECK_NAME} check run on $1; verify-bot-pr will block auto-merge"
+}
+
 # Enables auto-merge; a failure (e.g. the repository setting is off) only warns.
 enable_auto_merge() {
   if ! gh pr merge "$1" --auto --squash -R "${REPO}"
@@ -68,6 +94,7 @@ main() {
     log "nothing to open: ${branch} is missing or has no commits ahead of main"
     return 0
   fi
+  mark_head_built "${branch}"
   # A failed lookup reads as no open pull request: gh pr create refuses a
   # duplicate itself, so a transient list failure still gets the run its PR.
   # shellcheck disable=SC2310,SC2312
