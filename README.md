@@ -11,6 +11,9 @@ instead of compiling. A Sequoia bottle also pours on Tahoe. It can also carry
 formulae that core removed, disabled or restricted to arm64 when the software
 still works on Intel; those have a small reviewed patch.
 
+**Status:** phase 1. Formulae are generated and checked, but no bottles are
+published yet, so installs build from source (for example `lz4`).
+
 Formulae in `Formula/` are generated from homebrew-core and must not be edited
 by hand. See `CLAUDE.md` for the workflow.
 
@@ -26,6 +29,11 @@ brew trust elioseverojunior/intel
 brew reinstall elioseverojunior/intel/llvm   # switches an installed core keg
 ```
 
+Switching an installed core formula to the tap needs its tap dependencies
+switched first: run `brew reinstall elioseverojunior/intel/<dep>` in
+dependency order, because `brew install` refuses a name installed from
+another tap.
+
 In a Brewfile:
 
 ```ruby
@@ -39,8 +47,7 @@ one day plus build time).
 
 ## Requirements
 
-- Intel macOS with Homebrew in `/usr/local`. Bottles are built there and only
-  some of them pour elsewhere.
+- Intel macOS with Homebrew in `/usr/local`. Bottles are built there.
 - Sequoia 15 or Tahoe 26.
 
 ## License

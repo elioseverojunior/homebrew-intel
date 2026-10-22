@@ -38,10 +38,15 @@ bottle block.
 
    For a disabled or arm64-gated formula still in core, use the core commit
    you checked.
-3. **Render.** `mise run render` (add `-- --core-commit <sha>` to pin core,
+3. **Render.** Render reads `.cache/api/formula.json`: run
+   `scripts/audit/fetch-api.sh` first when it is missing or stale (needs
+   Python 3.11+, pinned via mise). `mise run render` (add
+   `-- --core-commit <sha>` to pin core,
    `-- --print-order` to see the build order including tap dependencies).
-4. **Patched only: write the patch.** Edit the rendered
-   `Formula/<letter>/<name>.rb` minimally (remove arch gates, `disable!`,
+4. **Patched only: write the patch.** Until it exists, render writes the
+   formula unpatched from `base` and prints a notice. Edit the rendered
+   `Formula/<shard>/<name>.rb` (`lib*` names go to `Formula/lib/`)
+   minimally (remove arch gates, `disable!`,
    `deprecate!` added for Intel, or the build fix), then run
    `mise run render -- --make-patch <name>`. A patch may not change what the
    software does.

@@ -21,11 +21,13 @@ Design: `docs/superpowers/specs/2026-10-21-intel-bottles-design.md`.
 
 ## Conventions
 
-- Formulae in `Formula/<letter>/<name>.rb` are **generated** from
-  homebrew-core by `scripts/tap/render.py` (`mise run render`). Never
-  hand-edit a Formula file or its `bottle do` block: `brew pr-pull` writes
-  the bottle block after the permanent marker line
-  `# bottle block: written by brew pr-pull`.
+- Formulae in `Formula/<shard>/<name>.rb` (`<shard>` is the first letter;
+  `lib*` names go to `Formula/lib/`) are **generated** from homebrew-core by
+  `scripts/tap/render.py` (`mise run render`). Never hand-edit a Formula file
+  or its `bottle do` block. The render leaves a permanent two-space-indented
+  marker line `# bottle block: written by brew pr-pull`. `brew pr-pull`
+  inserts the bottle block after `livecheck`/`head`, and the next render moves
+  it right after the marker line. Drift ignores the block either way.
 - Each rendered file starts with a two-line header naming the core commit it
   came from. The drift check re-renders from that commit.
 - Enabling a formula means adding an entry to `enabled.toml`
@@ -34,8 +36,9 @@ Design: `docs/superpowers/specs/2026-10-21-intel-bottles-design.md`.
 - A patched formula (core removed, disabled or arm64-gated it, or it fails on
   Intel): edit the rendered file, then run
   `mise run render -- --make-patch <name>` to write `patches/<name>.patch`.
-  Commit the patch and the render. A patch may only remove Intel gates,
-  revive a removed formula, or fix an Intel build failure.
+  Until the patch exists, render writes the formula unpatched from `base` and
+  prints a notice. Commit the patch and the render. A patch may only remove
+  Intel gates, revive a removed formula, or fix an Intel build failure.
 - Same name as core. Users must install fully qualified
   (`brew install elioseverojunior/intel/<name>`), or core's version wins. Say
   so in README and caveats; never rename to dodge the collision.
@@ -46,6 +49,9 @@ Design: `docs/superpowers/specs/2026-10-21-intel-bottles-design.md`.
 ## Verification
 
 Before any commit that touches a formula or `enabled.toml`:
+
+Render reads `.cache/api/formula.json`: run `scripts/audit/fetch-api.sh`
+first when it is missing or stale. It needs Python 3.11+ (pinned via mise).
 
 ```bash
 mise run render
