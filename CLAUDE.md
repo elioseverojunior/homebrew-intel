@@ -122,14 +122,16 @@ rebuilds `reports/` from a fresh API snapshot plus local git history, taps and
   the target.
 - No secret ever reaches the build host: formula code runs there as the
   runner's user and can read any ancestor's environment. Its `build.yml` has
-  four jobs:
+  five jobs:
+  - `prepare` (hosted): resolves `main` to one commit; every other job checks
+    out exactly that commit, never a ref named by the host or its artifact.
   - `build` (self-hosted, no token): `scripts/builder/run.sh --build-only`
     renders, plans, builds and bottles, and uploads `.builder/out` (manifest,
     bottles, rendered formulae, logs) as the `builder-out` artifact. It and
     `pour.sh` refuse to start when a GitHub token is in the environment.
   - `verify` (hosted, no permissions): the trust boundary,
-    `scripts/builder/verify_artifact.py`. The build commit must be on `main`
-    and each core commit on homebrew-core's HEAD
+    `scripts/builder/verify_artifact.py`. The manifest's tap commit must be
+    prepare's, and each core commit on homebrew-core's HEAD
     (`scripts/ci/fetch-core.sh`). Every formula must be, bottle block aside,
     exactly its core render, and every bottle block must parse as only the
     lines brew writes, before any formula is evaluated.
