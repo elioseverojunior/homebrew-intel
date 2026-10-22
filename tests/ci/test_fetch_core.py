@@ -42,6 +42,11 @@ class FetchCoreTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn(f"{self.commit} is not on homebrew-core HEAD (status: diverged)", result.stderr)
 
+    def test_an_api_error_fails_closed(self):
+        self.fake.respond("gh", "api", f"{COMPARE}/{self.commit}...HEAD", stderr="gh: HTTP 500\n", exit_code=1)
+        result = self.run_script(self.commit)
+        self.assertNotEqual(result.returncode, 0)
+
     def test_refuses_a_malformed_commit_before_fetching(self):
         result = self.run_script("--upload-pack=evil")
         self.assertEqual(result.returncode, 2)
