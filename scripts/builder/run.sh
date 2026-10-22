@@ -26,6 +26,9 @@ readonly run_dir="${TAP_DIR}/.builder"
 readonly log_dir="${BUILDER_LOG_DIR:-${run_dir}/logs}"
 readonly cache_dir="${BUILDER_CACHE:-${HOME}/Library/Caches/homebrew-intel-builder}"
 readonly core_url="${BUILDER_CORE_URL:-https://github.com/Homebrew/homebrew-core}"
+# The Taps link's original target, kept while the link is swapped. A run killed
+# with SIGKILL cannot restore the link; the next run reads it back from here.
+readonly saved_target="${cache_dir}/taps-link-target"
 
 dry_run=no
 force_args=()
@@ -85,8 +88,30 @@ restore_taps_link() {
   set +e
   trap - EXIT
   log "restoring ${taps_link} -> ${link_target}"
-  ln -sfn "${link_target}" "${taps_link}" || log "could not restore ${taps_link}; point it at ${link_target} by hand"
+  if ln -sfn "${link_target}" "${taps_link}"; then
+    rm -f "${saved_target}"
+  else
+    log "could not restore ${taps_link}; point it at ${link_target} by hand"
+  fi
   exit "${status}"
+}
+
+# Sets link_target: the target saved by an interrupted run, else the link's
+# current one, saved atomically before the swap.
+record_link_target() {
+  if [[ -f "${saved_target}" ]]; then
+    link_target="$(cat "${saved_target}")"
+    log "recovering Taps link from a previous interrupted run (${link_target})"
+    return 0
+  fi
+  if [[ "$(cd "${taps_link}" 2>/dev/null && pwd -P)" = "$(cd "${TAP_DIR}" && pwd -P)" ]]; then
+    log "refusing to start: ${taps_link} already points at ${TAP_DIR}; repoint it at your tap clone"
+    exit 1
+  fi
+  link_target="$(readlink "${taps_link}")"
+  mkdir -p "${cache_dir}"
+  printf '%s\n' "${link_target}" >"${saved_target}.tmp"
+  mv -f "${saved_target}.tmp" "${saved_target}"
 }
 
 # brew resolves elioseverojunior/intel through this symlink, so it must point
@@ -98,7 +123,7 @@ swap_taps_link() {
     log "refusing to start: ${taps_link} is not a symlink"
     exit 1
   fi
-  link_target="$(readlink "${taps_link}")"
+  record_link_target
   trap restore_taps_link EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
@@ -133,12 +158,12 @@ render_and_commit() {
   local changed line path
   python3 "${TAP_DIR}/scripts/tap/render.py" --core-commit "${core_commit}"
   changed="$(git -C "${TAP_DIR}" status --porcelain --untracked-files=all -- Formula)"
-  while IFS= read -r line; do
+  while IFS= read -r line <&3; do
     path="${line:3}"
     [[ -n "${line}" && "${line:0:2}" != *D* && "${path}" == *.rb ]] || continue
     "${TAP_DIR}/scripts/builder/commit-formula.sh" "${branch}" "$(basename "${path}" .rb)" \
       "$(basename "${path}" .rb): update from core ${core_commit:0:7}"
-  done <<<"${changed}"
+  done 3<<<"${changed}"
 }
 
 planned_builds() {
@@ -150,11 +175,13 @@ record_built() {
 }
 
 record_failed() {
+  log "failed: $1 $2: $3"
   unbuilt+="$1 "
   failed_report+="- $1 $2: $3"$'\n'
 }
 
 record_skipped() {
+  log "skipped: $1: $2"
   unbuilt+="$1 "
   skipped_report+="- $1: $2"$'\n'
 }
@@ -193,7 +220,8 @@ build_one() {
     open_issue "${name}" "${version}" "${log_file}"
     return 0
   fi
-  if ! "${TAP_DIR}/scripts/builder/commit-formula.sh" "${branch}" "${name}" "${name}: add ${version} sequoia bottle"; then
+  if ! "${TAP_DIR}/scripts/builder/commit-formula.sh" "${branch}" "${name}" "${name}: add ${version} sequoia bottle" 2>&1 |
+    tee -a "${log_file}"; then
     record_failed "${name}" "${version}" "bottled, but the commit failed"
     return 0
   fi
@@ -204,6 +232,10 @@ build_one() {
 build_planned_formula() {
   local name="$1" version="$2" dependency
   shift 2
+  if [[ ! "${name}" =~ ${NAME_PATTERN} ]]; then
+    record_failed "${name}" "${version}" "invalid formula name in the plan"
+    return 0
+  fi
   if [[ "${version}" = "-" ]]; then
     record_skipped "${name}" "no API entry"
     return 0
@@ -221,10 +253,10 @@ build_all() {
   local plan fields
   plan="$(planned_builds)"
   mkdir -p "${log_dir}"
-  while read -r -a fields; do
+  while read -r -a fields <&3; do
     [[ ${#fields[@]} -ge 2 ]] || continue
     build_planned_formula "${fields[@]}"
-  done <<<"${plan}"
+  done 3<<<"${plan}"
 }
 
 summary_section() {
@@ -255,6 +287,8 @@ print_dry_run() {
 
 main() {
   parse_arguments "$@"
+  # Nothing in a run reads stdin; children (brew, gh) get /dev/null.
+  exec </dev/null
   set_branch
   mkdir -p "${run_dir}"
   if [[ "${dry_run}" = yes ]]; then
@@ -271,8 +305,8 @@ main() {
   render_and_commit
   build_all
   write_summary
-  "${TAP_DIR}/scripts/builder/open-pr.sh" "${branch}" "${run_dir}/summary.md"
   printf 'Built:\n%sFailed:\n%sSkipped:\n%s' "${built_report}" "${failed_report}" "${skipped_report}"
+  "${TAP_DIR}/scripts/builder/open-pr.sh" "${branch}" "${run_dir}/summary.md"
   [[ -z "${failed_report}" ]]
 }
 

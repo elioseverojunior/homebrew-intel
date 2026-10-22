@@ -32,6 +32,7 @@ entry = {{
     "script": script,
     "argv": args,
     "link": os.readlink(link) if link.is_symlink() else None,
+    "saved": (root / "cache" / "taps-link-target").is_file(),
     "env": {{name: os.environ.get(name) for name in names}},
 }}
 with open(root / "stubs.jsonl", "a", encoding="utf-8") as log:
@@ -45,10 +46,17 @@ elif script == "render.py":
         path.write_text(text, encoding="utf-8")
 elif script == "build-formula.sh":
     print(f"building {{args[0]}}", flush=True)
+    if args[0] in config.get("drain", []):
+        sys.stdin.read()
     time.sleep(config["sleep"].get(args[0], 0))
     if args[0] in config["fail"]:
         print(f"error: {{args[0]}} does not compile")
         sys.exit(1)
+elif script == "commit-formula.sh" and args[1] in config.get("commit_fail", []):
+    print(f"error: cannot commit {{args[1]}}", file=sys.stderr)
+    sys.exit(1)
+elif script == "open-pr.sh" and config.get("open_pr_fail"):
+    sys.exit(1)
 """
 
 
@@ -129,6 +137,10 @@ class RunTest(unittest.TestCase):
     def issues(self) -> list[list[str]]:
         return [argv for argv in self.fake.argvs() if argv[:3] == ["gh", "issue", "create"]]
 
+    @property
+    def saved_target(self) -> Path:
+        return self.root / "cache" / "taps-link-target"
+
     def assert_link_restored(self) -> None:
         self.assertEqual(self.link.readlink(), self.original)
 
@@ -180,6 +192,32 @@ class SymlinkTest(RunTest):
         os.killpg(process.pid, signal.SIGTERM)
         self.assertNotEqual(process.wait(timeout=20), 0)
         self.assert_link_restored()
+
+    def test_original_target_is_saved_and_cleared(self):
+        self.configure(plan="lz4 1.10.0\n")
+        self.assertEqual(self.run_script().returncode, 0)
+        self.assertEqual({entry["saved"] for entry in self.stub_calls()}, {True})
+        self.assertFalse(self.saved_target.exists())
+
+    def test_recovers_target_saved_by_interrupted_run(self):
+        self.saved_target.parent.mkdir(parents=True)
+        self.saved_target.write_text(f"{self.original}\n", encoding="utf-8")
+        self.link.unlink()
+        self.link.symlink_to(self.tap)
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("recovering Taps link from a previous interrupted run", result.stderr)
+        self.assert_link_restored()
+        self.assertFalse(self.saved_target.exists())
+
+    def test_refuses_when_link_already_points_at_checkout(self):
+        self.link.unlink()
+        self.link.symlink_to(self.tap)
+        result = self.run_script()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("already points at", result.stderr)
+        self.assertEqual(self.link.readlink(), self.tap)
+        self.assertEqual(self.stub_calls(), [])
 
 
 class BuildLoopTest(RunTest):
@@ -276,6 +314,33 @@ class BuildLoopTest(RunTest):
         result = self.run_script("--force", "z3", "--force", "lz4")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.stub_argvs("plan.py")[1], ["builds", "--force", "z3", "--force", "lz4"])
+
+    def test_child_reading_stdin_does_not_eat_the_plan(self):
+        self.configure(plan="z3 4.13.0\nlz4 1.10.0\n", drain=["z3"])
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.built(), ["z3", "lz4"])
+
+    def test_invalid_plan_name_fails_without_removing_anything(self):
+        victim = self.tap / ".builder" / "keep"
+        victim.mkdir(parents=True)
+        self.configure(plan="../keep 1.0\nlz4 1.10.0\n")
+        result = self.run_script()
+        self.assertEqual(result.returncode, 1)
+        self.assertTrue(victim.is_dir())
+        self.assertEqual(self.built(), ["lz4"])
+        self.assertIn("invalid formula name", result.stderr)
+
+    def test_commit_failure_after_build_is_a_failure(self):
+        self.configure(plan="z3 4.13.0\nllvm 19.1.0 z3\n", commit_fail=["z3"], open_pr_fail=True)
+        result = self.run_script()
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(self.built(), ["z3"])
+        self.assertIn("z3 4.13.0: bottled, but the commit failed", result.stderr)
+        self.assertIn("llvm: dependency z3 did not build", result.stderr)
+        self.assertIn("Failed:\n- z3 4.13.0: bottled, but the commit failed", result.stdout)
+        log = (self.tap / ".builder" / "logs" / "z3.log").read_text(encoding="utf-8")
+        self.assertIn("error: cannot commit z3", log)
 
 
 class RenderCommitTest(RunTest):
