@@ -1,0 +1,74 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+      - run: mise run lint
+      - run: mise run test
+
+  tap-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: Homebrew/actions/setup-homebrew@2026.10.19.1
+      - run: brew test-bot --only-tap-syntax
+
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Fetch the core commits the headers reference
+        run: |
+          git init core
+          git -C core remote add origin https://github.com/Homebrew/homebrew-core
+          mapfile -t commits < <(python3 scripts/tap/drift.py --list-commits)
+          if [ "${#commits[@]}" -eq 0 ]; then
+            echo "no header commits to fetch"
+          else
+            git -C core fetch --depth=1 --filter=blob:none origin "${commits[@]}"
+          fi
+      - name: Check drift
+        run: python3 scripts/tap/drift.py
+        env:
+          HOMEBREW_CORE_REPO: core
+
+  pour-test:
+    if: github.event_name == 'pull_request'
+    needs: [tap-syntax, drift]
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: Homebrew/actions/setup-homebrew@2026.10.19.1
+      - name: Pour changed bottled formulae
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -Eeuo pipefail
+          found=no
+          while IFS= read -r file; do
+            [ -f "$file" ] || continue
+            grep -q '^  bottle do' "$file" || continue
+            found=yes
+            name="$(basename "$file" .rb)"
+            brew install --force-bottle "elioseverojunior/intel/${name}"
+            brew test "elioseverojunior/intel/${name}"
+          done < <(git diff --name-only "origin/${BASE_REF}...HEAD" -- Formula)
+          if [ "$found" = no ]; then
+            echo "no bottled formulae changed"
+          fi
