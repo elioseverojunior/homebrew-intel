@@ -39,6 +39,10 @@ CHECK_RUN = {
     "conclusion": "success",
     "app": {"id": 4348245, "slug": "elios-automator"},
 }
+HUMAN = PULL_REQUEST | {"number": 2, "user": {"login": "elioseverojunior", "type": "User"}}
+HUMAN |= {"head": {"ref": "feature", "sha": "a" * 40, "repo": {"full_name": REPO}}}
+# A human pull request whose head is the bot's head commit.
+TWIN = HUMAN | {"head": HUMAN["head"] | {"sha": HEAD_SHA}}
 NO_CHECK = "head 5646363e5d4f has no successful bottle-builder check run from elios-automator"
 
 
@@ -182,6 +186,35 @@ class ProblemsTest(unittest.TestCase):
         self.assertIn("pull request changes no files", self.problems())
 
 
+class ImpersonationTest(unittest.TestCase):
+    """A pull request that is not the bot's must not share the bot's head commit."""
+
+    def problems(self, check_runs: list, open_pulls: list, pull_request: dict = TWIN) -> list[str]:
+        return verify_bot_pr.impersonation_problems(pull_request, check_runs, open_pulls)
+
+    def test_unrelated_head_passes(self):
+        other = PULL_REQUEST | {"head": PULL_REQUEST["head"] | {"sha": "f" * 40}}
+        self.assertEqual(self.problems([], [other]), [])
+
+    def test_same_head_as_an_open_bottle_pull_request_fails(self):
+        self.assertEqual(
+            self.problems([], [PULL_REQUEST]), ["head 5646363e5d4f is the head of bot branch pull request #1"]
+        )
+
+    def test_same_head_as_a_non_bottle_or_fork_pull_request_passes(self):
+        fork = PULL_REQUEST | {"head": PULL_REQUEST["head"] | {"repo": {"full_name": "someone/homebrew-intel"}}}
+        feature = PULL_REQUEST | {"head": PULL_REQUEST["head"] | {"ref": "feature"}}
+        self.assertEqual(self.problems([], [fork, feature, TWIN]), [])
+
+    def test_any_bottle_builder_check_run_fails(self):
+        for check_run in (CHECK_RUN, CHECK_RUN | {"app": {"id": 1, "slug": "other"}, "conclusion": "failure"}):
+            with self.subTest(check_run=check_run):
+                self.assertEqual(
+                    self.problems([check_run], []),
+                    ["head 5646363e5d4f carries a bottle-builder check run, but the pull request is not the bot's"],
+                )
+
+
 class LoadPagesTest(unittest.TestCase):
     def test_concatenated_pages_are_flattened(self):
         text = json.dumps([{"a": 1}]) + json.dumps([{"b": 2}, {"c": 3}]) + "\n"
@@ -200,7 +233,9 @@ class CommandLineTest(unittest.TestCase):
     def run_cli(self, pull_request: dict, *pages: list) -> subprocess.CompletedProcess:
         argv = [sys.executable, str(SCRIPT)]
         documents = zip(
-            ("event", "commits", "files", "check-runs"), ({"pull_request": pull_request}, *pages), strict=True
+            ("event", "commits", "files", "check-runs", "open-pulls"),
+            ({"pull_request": pull_request}, *pages),
+            strict=True,
         )
         for name, document in documents:
             path = self.root / f"{name}.json"
@@ -209,18 +244,26 @@ class CommandLineTest(unittest.TestCase):
         return subprocess.run(argv, capture_output=True, text=True, check=False)
 
     def test_verified_bot_pull_request_exits_zero(self):
-        result = self.run_cli(PULL_REQUEST, [COMMIT], [FILE], [CHECK_RUN])
+        result = self.run_cli(PULL_REQUEST, [COMMIT], [FILE], [CHECK_RUN], [PULL_REQUEST])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("pull request #1 is a verified bot bottle PR (1 commits, 1 files)", result.stdout)
 
     def test_human_pull_request_is_skipped(self):
-        human = PULL_REQUEST | {"user": {"login": "elioseverojunior", "type": "User"}}
-        result = self.run_cli(human, [], [{"filename": "README.md"}], [])
+        result = self.run_cli(HUMAN, [], [{"filename": "README.md"}], [], [PULL_REQUEST | {"number": 3}])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("not a bot PR — skipped", result.stdout)
 
+    def test_human_pull_request_on_the_bot_head_fails(self):
+        twin = HUMAN | {"head": {"ref": "bottle-copy", "sha": HEAD_SHA, "repo": {"full_name": "someone/fork"}}}
+        result = self.run_cli(twin, [], [FILE], [], [PULL_REQUEST, twin])
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("head 5646363e5d4f is the head of bot branch pull request #1", result.stderr)
+        result = self.run_cli(twin, [], [FILE], [CHECK_RUN | {"app": {"id": 1, "slug": "x"}}], [])
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("head 5646363e5d4f carries a bottle-builder check run", result.stderr)
+
     def test_failing_bot_pull_request_lists_every_problem(self):
-        result = self.run_cli(PULL_REQUEST, [], [{"filename": "README.md"}], [])
+        result = self.run_cli(PULL_REQUEST, [], [{"filename": "README.md"}], [], [])
         self.assertEqual(result.returncode, 1)
         self.assertIn(NO_CHECK, result.stderr)
         self.assertIn("pull request has no commits", result.stderr)

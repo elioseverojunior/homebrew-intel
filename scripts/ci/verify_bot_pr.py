@@ -11,12 +11,16 @@ as an extra layer. The PR must only touch `Formula/`, and the fetched commit
 and file lists must match the event's counts (and stay below the API listing
 limits) so a truncated listing cannot pass. Pull requests by anyone else are
 skipped with exit 0: they still need the owner to merge, since only the
-builder enables auto-merge.
+builder enables auto-merge. Status checks belong to a commit, not a pull
+request, so such a skip would also turn the gate green for every pull request
+on the same head; a pull request that is not the bot's therefore fails when its
+head carries any `bottle-builder` check run or is the head of another open
+same-repository `bottle/*` pull request.
 
 Usage: verify_bot_pr.py --event EVENT_JSON --commits COMMITS --files FILES
---check-runs CHECK_RUNS, where the last three are the output of
-`gh api --paginate` (one JSON array per page, concatenated; check runs as
-`--jq .check_runs`).
+--check-runs CHECK_RUNS --open-pulls OPEN_PULLS, where the last four are the
+output of `gh api --paginate` (one JSON array per page, concatenated; check
+runs as `--jq .check_runs`, open pulls from `pulls?state=open`).
 """
 
 import argparse
@@ -112,6 +116,26 @@ def _anchor_problems(pull_request: Mapping, check_runs: Sequence[Mapping]) -> li
     return [f"head {head_sha[:12]} has no successful {CHECK_NAME} check run from {APP_SLUG}"]
 
 
+def _bottle_branch_pull(pull: Mapping, base: str | None) -> bool:
+    head = pull.get("head") or {}
+    return (head.get("repo") or {}).get("full_name") == base and bool(BRANCH_PATTERN.fullmatch(head.get("ref") or ""))
+
+
+def impersonation_problems(
+    pull_request: Mapping, check_runs: Sequence[Mapping], open_pulls: Sequence[Mapping]
+) -> list[str]:
+    """Why a pull request that is not the bot's must fail rather than skip; empty when it may skip."""
+    head_sha, base = pull_request["head"]["sha"], (pull_request["base"].get("repo") or {}).get("full_name")
+    found = []
+    if any(check_run.get("name") == CHECK_NAME for check_run in check_runs):
+        found.append(f"head {head_sha[:12]} carries a {CHECK_NAME} check run, but the pull request is not the bot's")
+    for pull in open_pulls:
+        twin = pull.get("number") != pull_request["number"] and (pull.get("head") or {}).get("sha") == head_sha
+        if twin and _bottle_branch_pull(pull, base):
+            found.append(f"head {head_sha[:12]} is the head of bot branch pull request #{pull['number']}")
+    return found
+
+
 def _count_problems(kind: str, fetched: int, expected: int, limit: int) -> list[str]:
     problems = []
     if fetched != expected:
@@ -149,17 +173,21 @@ def load_pages(text: str) -> list:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    for option in ("--event", "--commits", "--files", "--check-runs"):
+    for option in ("--event", "--commits", "--files", "--check-runs", "--open-pulls"):
         parser.add_argument(option, type=Path, required=True)
     args = parser.parse_args(argv)
     pull_request = json.loads(args.event.read_text(encoding="utf-8"))["pull_request"]
     number = pull_request["number"]
-    if not is_bot_pr(pull_request):
-        print(f"pull request #{number} is not a bot PR — skipped")
-        return 0
     pages = (load_pages(path.read_text(encoding="utf-8")) for path in (args.commits, args.files, args.check_runs))
     evidence = Evidence(*pages)
-    found = problems(pull_request, evidence)
+    if is_bot_pr(pull_request):
+        found = problems(pull_request, evidence)
+    else:
+        open_pulls = load_pages(args.open_pulls.read_text(encoding="utf-8"))
+        found = impersonation_problems(pull_request, evidence.check_runs, open_pulls)
+        if not found:
+            print(f"pull request #{number} is not a bot PR — skipped")
+            return 0
     for problem in found:
         print(f"verify-bot-pr: {problem}", file=sys.stderr)
     if found:

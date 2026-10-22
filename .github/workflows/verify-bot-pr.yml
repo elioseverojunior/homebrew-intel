@@ -4,7 +4,10 @@ name: verify-bot-pr
 # builder's auto-merge hinges on it. pull_request_target runs this file and the
 # checker as they are on the base branch, so a pull request cannot rewrite the
 # check that judges it. Never check out, build or run the pull request's code
-# here: the job only reads its metadata through the API.
+# here: the job only reads its metadata through the API. Never restore a cache
+# here either (actions/cache, a setup-* action's cache, jdx/mise-action): any
+# job of this repository can write cache entries, so a restore would run code
+# that this trusted job did not check out.
 on:
   pull_request_target:
     # edited: retargeting the base branch must re-run the gate.
@@ -47,6 +50,8 @@ jobs:
           gh api --paginate "${pulls}/files" > "${RUNNER_TEMP}/files.json"
           gh api --paginate "repos/${REPOSITORY}/commits/${HEAD_SHA}/check-runs?check_name=bottle-builder" \
             --jq .check_runs > "${RUNNER_TEMP}/check-runs.json"
+          # A pull request that is not the bot's fails on the bot's head commit.
+          gh api --paginate "repos/${REPOSITORY}/pulls?state=open&per_page=100" > "${RUNNER_TEMP}/open-pulls.json"
           python3 scripts/ci/verify_bot_pr.py --event "${GITHUB_EVENT_PATH}" \
             --commits "${RUNNER_TEMP}/commits.json" --files "${RUNNER_TEMP}/files.json" \
-            --check-runs "${RUNNER_TEMP}/check-runs.json"
+            --check-runs "${RUNNER_TEMP}/check-runs.json" --open-pulls "${RUNNER_TEMP}/open-pulls.json"
