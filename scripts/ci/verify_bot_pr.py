@@ -3,8 +3,8 @@
 A bot PR passes only when it comes from the builder's GitHub App on a
 same-repository `bottle/<YYYY-MM-DD>-<run>` branch into `main`, and its head
 commit carries a successful `bottle-builder` check run created by that App
-whose `head_sha` and `external_id` both name that commit. The check run is
-the trust anchor: commit author, committer and verification can be forged by
+(its id and slug) whose `head_sha` and `external_id` both name that commit.
+The check run is the trust anchor: commit author, committer and verification can be forged by
 anyone with write access, but only the App can create its own check runs, and
 any later push moves the head to a commit without one. The commit checks stay
 as an extra layer. The PR must only touch `Formula/`, and the fetched commit
@@ -29,6 +29,9 @@ from typing import NamedTuple
 
 BOT_LOGIN = "elios-automator[bot]"
 APP_SLUG = "elios-automator"
+# The App's numeric id never changes or moves to another App; the slug is kept
+# as a second condition.
+APP_ID = 4348245
 CHECK_NAME = "bottle-builder"
 # GitHub lists at most this many commits / files of a pull request.
 COMMIT_LIMIT = 250
@@ -94,6 +97,7 @@ def _file_problems(changed: Mapping) -> list[str]:
 def _built_by_the_app(check_run: Mapping, head_sha: str) -> bool:
     return (
         check_run.get("name") == CHECK_NAME
+        and (check_run.get("app") or {}).get("id") == APP_ID
         and (check_run.get("app") or {}).get("slug") == APP_SLUG
         and check_run.get("conclusion") == "success"
         and check_run.get("head_sha") == head_sha

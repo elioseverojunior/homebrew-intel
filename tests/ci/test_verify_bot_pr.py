@@ -37,7 +37,7 @@ CHECK_RUN = {
     "external_id": HEAD_SHA,
     "status": "completed",
     "conclusion": "success",
-    "app": {"slug": "elios-automator"},
+    "app": {"id": 4348245, "slug": "elios-automator"},
 }
 NO_CHECK = "head 5646363e5d4f has no successful bottle-builder check run from elios-automator"
 
@@ -107,6 +107,14 @@ class ProblemsTest(unittest.TestCase):
 
     def test_check_run_from_another_app_fails(self):
         self.check_runs[0]["app"] = {"slug": "github-actions"}
+        self.assertEqual(self.problems(), [NO_CHECK])
+
+    def test_check_run_from_an_app_reusing_the_slug_fails(self):
+        self.check_runs[0]["app"] = {"id": 1, "slug": "elios-automator"}
+        self.assertEqual(self.problems(), [NO_CHECK])
+
+    def test_check_run_needs_the_slug_too(self):
+        self.check_runs[0]["app"] = {"id": 4348245, "slug": "renamed"}
         self.assertEqual(self.problems(), [NO_CHECK])
 
     def test_check_run_on_another_commit_fails(self):

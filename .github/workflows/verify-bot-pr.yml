@@ -15,9 +15,12 @@ permissions:
   pull-requests: read
   checks: read
 
+# One group per head commit, queued rather than cancelled: an edit (title,
+# base) must not cancel a running verdict for the same head, and a new push
+# gets its own group and verdict.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: false
 
 jobs:
   verify-bot-pr:
