@@ -8,3 +8,13 @@ __pycache__/
 
 # Personal: lists the owner's Brewfile path and every installed package
 reports/brewfile.*
+
+# Repositories
+repos/
+
+# Actions Runner
+.github/actions-runner/
+actions-runner/
+
+# Homebrew Intel Private
+homebrew-intel-private/
