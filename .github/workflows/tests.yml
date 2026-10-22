@@ -43,6 +43,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -Eeuo pipefail
           commits="$(python3 scripts/tap/drift.py --list-commits)"
           if [ -z "$commits" ]; then
             echo "no header commits to fetch"
@@ -76,25 +77,30 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: Homebrew/actions/setup-homebrew@2026.10.19.1
-      - name: Pour changed bottled formulae
+      - uses: jdx/mise-action@v5
+        with:
+          install_args: python
+      - name: Pour changed bottled formulae in build order
         env:
           BASE_REF: ${{ github.base_ref }}
         run: |
-          changed="$(git diff --name-only "origin/${BASE_REF}...HEAD" -- Formula)"
+          set -Eeuo pipefail
+          changed="$(git diff --name-only "origin/${BASE_REF}...HEAD" -- Formula | sed 's@.*/@@; s@\.rb$@@')"
+          scripts/audit/fetch-api.sh
+          order="$(python3 scripts/tap/render.py --print-order)"
           brew trust elioseverojunior/intel
           found=no
-          while IFS= read -r file; do
-            [ -n "$file" ] && [ -f "$file" ] || continue
-            grep -q '^  bottle do' "$file" || continue
+          while IFS= read -r name <&3; do
+            grep -qxF "$name" <<< "$changed" || continue
+            grep -qs '^  bottle do' Formula/*/"${name}.rb" || continue
             found=yes
-            name="$(basename "$file" .rb)"
             if [ -d "$(brew --cellar)/${name}" ]; then
               brew reinstall --force-bottle "elioseverojunior/intel/${name}"
             else
               brew install --force-bottle "elioseverojunior/intel/${name}"
             fi
             brew test "elioseverojunior/intel/${name}"
-          done <<< "$changed"
+          done 3<<< "$order"
           if [ "$found" = no ]; then
             echo "no bottled formulae changed"
           fi
