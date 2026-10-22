@@ -2,10 +2,10 @@
 
 FakeBin writes `brew` and `gh` stubs into a temp directory and builds a PATH
 of only that directory plus /usr/bin:/bin, so the real Homebrew can never be
-reached. Each call appends one JSON line (tool, argv, cwd, HOMEBREW_* env) to
-a log. Rules in a JSON config decide what a call prints and how it exits; the
-first rule whose argv is a prefix of the call wins, and unmatched calls exit 0
-silently. `brew bottle --json` also writes a bottle JSON and tarball in its cwd,
+reached. Each call appends one JSON line (tool, argv, cwd, HOMEBREW_* env and
+GH_TOKEN) to a log. Rules in a JSON config decide what a call prints and how
+it exits; the first rule whose argv is a prefix of the call wins, and unmatched
+calls exit 0 silently. `brew bottle --json` also writes a bottle JSON and tarball in its cwd,
 the way the real command does, with `filename` URL-encoded as brew encodes it.
 A rule may sleep before answering, and each call that runs to completion
 appends a second `{"done": argv}` line.
@@ -38,7 +38,7 @@ REPO_API = "repos/elioseverojunior/homebrew-intel/"
 LOG, CONFIG = {log!r}, {config!r}
 tool, args = os.path.basename(sys.argv[0]), sys.argv[1:]
 call = [tool, *args]
-env = {{key: value for key, value in os.environ.items() if key.startswith("HOMEBREW_")}}
+env = {{key: value for key, value in os.environ.items() if key.startswith("HOMEBREW_") or key == "GH_TOKEN"}}
 stdin = sys.stdin.read() if "--input" in args else None
 with open(LOG, "a", encoding="utf-8") as log:
     log.write(json.dumps({{"argv": call, "cwd": os.getcwd(), "env": env, "stdin": stdin}}) + "\\n")

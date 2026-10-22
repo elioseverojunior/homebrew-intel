@@ -9,6 +9,9 @@ __pycache__/
 # Personal: lists the owner's Brewfile path and every installed package
 reports/brewfile.*
 
+# Builder run state: API snapshot, logs, bottles, summary
+.builder/
+
 # Repositories
 repos/
 
