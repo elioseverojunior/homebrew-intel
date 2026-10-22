@@ -15,6 +15,7 @@ STUBBED = (
     "scripts/tap/plan.py",
     "scripts/tap/render.py",
     "scripts/builder/build-formula.sh",
+    "scripts/builder/pour-formula.sh",
 )
 
 # One stub stands in for every script run.sh calls. Each call is logged with
@@ -73,6 +74,9 @@ elif script == "build-formula.sh":
         sys.exit(1)
     if args[0] not in config.get("no_bottle", []):
         write_bottle(*args)
+elif script == "pour-formula.sh":
+    time.sleep(config["sleep"].get(args[0], 0))
+    sys.exit(1 if args[0] in config["fail"] else 0)
 """
 
 
