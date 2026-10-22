@@ -15,6 +15,12 @@ class Lz4 < Formula
     strategy :github_latest
   end
 
+  bottle do
+    root_url "https://github.com/elioseverojunior/homebrew-intel/releases/download/lz4-1.10.0"
+    rebuild 1
+    sha256 cellar: :any, sequoia: "acedd08be0a64ac545e1b718fcfbd16263ddb15718397eefcf8e1bd69fd3da7e"
+  end
+
   # bottle block: written by brew pr-pull
 
   depends_on "cmake" => :build
