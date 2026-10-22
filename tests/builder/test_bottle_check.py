@@ -103,5 +103,29 @@ class BottleCheckTest(unittest.TestCase):
         self.assertIn("bottle JSON evil.json is not", " ".join(self.problems()))
 
 
+class SyntaxTest(unittest.TestCase):
+    def test_valid_blocks_pass(self):
+        rebuilt = block(f'root_url "{ROOT_URL}"', "rebuild 2", f'sha256 sequoia: "{SHA}"', f'sha256 tahoe: "{SHA}"')
+        for text in (GOOD_BLOCK, rebuilt):
+            self.assertEqual(bottle_check.syntax_problems(text), [], text)
+
+    def test_anything_else_fails(self):
+        sha_line = f'sha256 cellar: :any, sequoia: "{SHA}"'
+        root = f'root_url "{ROOT_URL}"'
+        broken = {
+            "hidden code": block(root, 'system "curl", "evil"', sha_line),
+            "extra keyword": block(root, "cellar :any", sha_line),
+            "non-hex sha": block(root, sha_line.replace(SHA[:4], "zzzz")),
+            "comment": block(root, "# note", sha_line),
+            "blank line": block(root, "", sha_line).replace("    \n", "\n"),
+            "other host": block('root_url "https://evil.example/x"', sha_line),
+            "other tag": block(root, f'sha256 arm64_sequoia: "{SHA}"'),
+            "no sha": block(root),
+            "interpolated cellar": block(root, f'sha256 cellar: "#{{`id`}}", sequoia: "{SHA}"'),
+        }
+        for label, text in broken.items():
+            self.assertNotEqual(bottle_check.syntax_problems(text), [], label)
+
+
 if __name__ == "__main__":
     unittest.main()

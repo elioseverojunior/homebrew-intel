@@ -12,11 +12,14 @@ bottle block must agree with that version, its tarball and its bottle JSON
 (bottle_check.py); a render-only one keeps main's block or has none.
 
 Usage: verify_artifact.py --artifact DIR [--tap DIR]
-(--formulae-only | --versions JSON | --list-commits). The core repository
-comes from HOMEBREW_CORE_REPO. --formulae-only checks the manifest and the
-formula texts only, before anything evaluates a formula; --versions maps each
-built name to its derived pkg_version for the full check. --list-commits
-validates the manifest and prints the core commits to fetch, one per line.
+(--formulae-only [--renders DIR] | --versions JSON | --list-commits). The
+core repository comes from HOMEBREW_CORE_REPO. --formulae-only checks the
+manifest, each bottle section's strict grammar and the formula texts, before
+anything evaluates a formula; with --renders it then writes each formula's
+trusted render (made here from core, never copied from the artifact) for
+derive-versions.sh to evaluate. --versions maps each built name to its
+derived pkg_version for the full check. --list-commits validates the manifest
+and prints the core commits to fetch, one per line.
 """
 
 import argparse
@@ -29,7 +32,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tap"))
-from bottle_check import Bottle
+from bottle_check import Bottle, syntax_problems
 from bottle_check import problems as bottle_problems
 from bottles import release_tag
 from core_source import core_repo, formula_relpath, read_formula
@@ -37,7 +40,7 @@ from drift import short_diff
 from enabled import Entry, load_enabled
 from manifest import MANIFEST, SCALARS, SECTIONS
 from render import RENDER_ERRORS, formula_files, patch_path, render_formula
-from transform import bottle_blocks, strip_bottle_block
+from transform import BOTTLE_MARKER, bottle_blocks, strip_bottle_block
 
 PATTERNS = {
     "name": re.compile(r"[a-z0-9][a-z0-9@._+-]*"),
@@ -109,7 +112,14 @@ def _regular_file(path: Path, label: str) -> list[str]:
     return [] if path.is_file() and not path.is_symlink() else [f"{label} is not a regular file"]
 
 
-def _bottle_section_problems(context: Context, section: str, entry: Mapping, text: str) -> list[str]:
+def _placement_problems(text: str, block: str) -> list[str]:
+    after_marker = f"{BOTTLE_MARKER}\n{block}" in text
+    before_marker = f"{block}\n{BOTTLE_MARKER}\n" in text
+    return [] if after_marker or before_marker else ["bottle block is not next to the bottle marker"]
+
+
+def _shape_problems(context: Context, section: str, entry: Mapping, text: str) -> list[str]:
+    """The bottle section's grammar, checked in every mode before anything else."""
     blocks = bottle_blocks(text)
     if section == "render_only":
         main_path = context.tap / entry["relpath"]
@@ -117,29 +127,37 @@ def _bottle_section_problems(context: Context, section: str, entry: Mapping, tex
         return [] if not blocks or blocks == main else ["render-only bottle block differs from main's"]
     if len(blocks) != 1:
         return [f"expected one bottle block, found {len(blocks)}"]
+    return syntax_problems(blocks[0]) or _placement_problems(text, blocks[0])
+
+
+def _bottle_problems(context: Context, entry: Mapping, text: str) -> list[str]:
+    (block,) = bottle_blocks(text)
     tarball, json_path = (context.out / "bottles" / entry[key] for key in ("tarball", "json"))
     found = _regular_file(tarball, entry["tarball"]) + _regular_file(json_path, entry["json"])
     if found:
         return found
     version = (context.versions or {}).get(entry["name"], entry["version"])
     bottle = Bottle(entry["name"], version, tarball, entry["json"])
-    return bottle_problems(blocks[0], json.loads(json_path.read_text(encoding="utf-8")), bottle)
+    return bottle_problems(block, json.loads(json_path.read_text(encoding="utf-8")), bottle)
 
 
-def formula_problems(context: Context, section: str, entry: Mapping) -> list[str]:
+def _checked_render(context: Context, section: str, entry: Mapping) -> tuple[list[str], str | None]:
+    """Problems of one formula and, when there are none, its trusted render."""
     relpath = entry["relpath"]
     if found := _regular_file(context.out / relpath, relpath):
-        return found
+        return found, None
     text = (context.out / relpath).read_text(encoding="utf-8")
+    if found := _shape_problems(context, section, entry, text):
+        return [f"{relpath}: {problem}" for problem in found], None
     try:
         expected = expected_formula(context, entry["name"])
     except RENDER_ERRORS as error:
-        return [f"{relpath}: {error}"]
-    found = [] if context.versions is None else _bottle_section_problems(context, section, entry, text)
+        return [f"{relpath}: {error}"], None
+    found = [] if context.versions is None or section != "built" else _bottle_problems(context, entry, text)
     if (actual := strip_bottle_block(text)) != expected:
         commit = context.document["core_commit"]
         found.append(f"differs from core@{commit} (+ patch):\n{short_diff(expected, actual, relpath).rstrip()}")
-    return [f"{relpath}: {problem}" for problem in found]
+    return [f"{relpath}: {problem}" for problem in found], None if found else expected
 
 
 def checkout_sha(tap: Path) -> str:
@@ -160,17 +178,13 @@ def version_problems(built: list[Mapping], versions: Mapping[str, str]) -> list[
     return found + [f"release tag {tag} is claimed more than once" for tag in duplicates]
 
 
-def problems(out: Path, tap: Path, repo: Path, versions: Mapping[str, str] | None) -> list[str]:
-    """Every reason the artifact must not be published; empty when it may.
-
-    With versions None, only the manifest and the formula texts are checked.
-    """
+def _check(out: Path, tap: Path, repo: Path, versions: Mapping[str, str] | None) -> tuple[list[str], dict]:
     try:
         document = json.loads((out / MANIFEST).read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
-        return [f"{MANIFEST}: {error}"]
+        return [f"{MANIFEST}: {error}"], {}
     if found := manifest_problems(document, checkout_sha(tap)):
-        return found
+        return found, {}
     published = [(section, entry) for section in PUBLISHED for entry in document[section]]
     listed = {entry["relpath"] for _, entry in published}
     paths = [path.relative_to(out).as_posix() for path in formula_files(out)]
@@ -180,9 +194,32 @@ def problems(out: Path, tap: Path, repo: Path, versions: Mapping[str, str] | Non
     context = Context(out, tap, repo, document, entries, tap_names, versions)
     if versions is not None:
         found += version_problems(document["built"], versions)
+    renders = {}
     for section, entry in published:
-        found += formula_problems(context, section, entry)
-    return found
+        problems_found, render = _checked_render(context, section, entry)
+        found += problems_found
+        renders[entry["relpath"]] = render
+    return found, renders
+
+
+def problems(out: Path, tap: Path, repo: Path, versions: Mapping[str, str] | None) -> list[str]:
+    """Every reason the artifact must not be published; empty when it may.
+
+    With versions None, the manifest, the bottle sections' grammar and the
+    formula texts are checked, but not bottle contents or versions.
+    """
+    return _check(out, tap, repo, versions)[0]
+
+
+def write_renders(out: Path, tap: Path, repo: Path, renders_dir: Path) -> list[str]:
+    """Run the formulae-only check; only when it passes, write each trusted render."""
+    found, renders = _check(out, tap, repo, None)
+    if found:
+        return found
+    for relpath, text in renders.items():
+        (renders_dir / relpath).parent.mkdir(parents=True, exist_ok=True)
+        (renders_dir / relpath).write_text(text, encoding="utf-8")
+    return []
 
 
 def needed_commits(out: Path, tap: Path) -> list[str]:
@@ -202,13 +239,19 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     mode.add_argument("--formulae-only", action="store_true", help="check the manifest and formula texts only")
     mode.add_argument("--versions", type=Path, help="JSON mapping each built name to its derived pkg_version")
     mode.add_argument("--list-commits", action="store_true", help="print the core commits to fetch")
-    return parser.parse_args(argv)
+    parser.add_argument("--renders", type=Path, help="with --formulae-only: write each trusted render here")
+    args = parser.parse_args(argv)
+    if args.renders and not args.formulae_only:
+        parser.error("--renders needs --formulae-only")
+    return args
 
 
 def run(args: argparse.Namespace) -> list[str]:
     if args.list_commits:
         print("\n".join(needed_commits(args.artifact, args.tap)))
         return []
+    if args.renders:
+        return write_renders(args.artifact, args.tap, core_repo(), args.renders)
     versions = None
     if args.versions:
         versions = json.loads(args.versions.read_text(encoding="utf-8"))

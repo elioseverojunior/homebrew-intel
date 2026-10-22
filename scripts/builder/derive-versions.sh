@@ -2,15 +2,18 @@
 
 set -Eeuo pipefail
 
-# Derive each built formula's pkg_version on the hosted runner, from the
-# verified formula itself and never from the host-written manifest:
-#   derive-versions.sh <artifact-dir> <versions.json>
-# Run it only after `verify_artifact.py --formulae-only` proved every artifact
-# formula equals its core render, so loading one runs only core's own code.
-# brew loads formulae only from a tap, so this builds a scratch tap (the
-# checkout's formulae plus the artifact's), links it as
+# Derive each built formula's pkg_version on the hosted runner, never from the
+# host-written manifest and never by evaluating an artifact file:
+#   derive-versions.sh <renders-dir> <artifact-dir> <versions.json>
+# <renders-dir> holds the trusted renders `verify_artifact.py --formulae-only
+# --renders` wrote after proving each artifact formula equals its core render
+# with a strictly parsed bottle block; only that text, made from core, is ever
+# loaded. brew loads formulae only from a tap, so this builds a scratch tap
+# (the checkout's formulae plus the renders), links it as
 # elioseverojunior/homebrew-intel, trusts just the built formulae and reads
-# versions.stable and revision with `brew info`. Writes {"<name>": "<pkg_version>"}.
+# versions.stable and revision with `brew info`. The artifact only supplies the
+# built names. Writes {"<name>": "<pkg_version>"}. Refuses to run with any
+# token in its environment, since it loads formula code.
 # Env: TAP_DIR (the checkout; default this script's repository).
 
 readonly TAP="elioseverojunior/intel"
@@ -22,28 +25,24 @@ log() {
   echo "derive-versions: $*" >&2
 }
 
-# Prints "<name>\t<relpath>" of every formula in the artifact.
-artifact_formulae() {
-  local render_only built
-  render_only="$(python3 "${script_dir}/manifest.py" rows "$1" render_only)"
-  built="$(python3 "${script_dir}/manifest.py" rows "$1" built)"
-  printf '%s\n' "${render_only}"
-  cut -f1,3 <<<"${built}"
-}
-
-# Sets scratch to a new tap holding the checkout's Formula plus the artifact's.
+# Sets scratch to a new tap holding the checkout's Formula plus the renders.
 make_scratch_tap() {
-  local out="$1" listing name relpath
-  listing="$(artifact_formulae "${out}")"
   scratch="$(mktemp -d)"
   mkdir -p "${scratch}/Formula"
   [[ ! -d "${TAP_DIR}/Formula" ]] || cp -R "${TAP_DIR}/Formula/." "${scratch}/Formula/"
-  while IFS=$'\t' read -r name relpath <&3
+  [[ ! -d "$1/Formula" ]] || cp -R "$1/Formula/." "${scratch}/Formula/"
+}
+
+refuse_tokens() {
+  local secret
+  for secret in GH_TOKEN GITHUB_TOKEN PRIVATE_GH_TOKEN HOMEBREW_GITHUB_API_TOKEN
   do
-    [[ -n "${name}" ]] || continue
-    mkdir -p "$(dirname "${scratch}/${relpath}")"
-    cp -f "${out}/${relpath}" "${scratch}/${relpath}"
-  done 3<<<"${listing}"
+    if [[ -n "${!secret:-}" ]]
+    then
+      log "refusing: ${secret} is set; formula code must not run next to a token"
+      exit 2
+    fi
+  done
 }
 
 link_tap() {
@@ -90,15 +89,16 @@ write_versions() {
 }
 
 main() {
-  if [[ $# -ne 2 || ! -f "$1/manifest.json" ]]
+  if [[ $# -ne 3 || ! -d "$1" || ! -f "$2/manifest.json" ]]
   then
-    log "usage: derive-versions.sh <artifact-dir> <versions.json>"
+    log "usage: derive-versions.sh <renders-dir> <artifact-dir> <versions.json>"
     exit 2
   fi
+  refuse_tokens
   local scratch=""
   make_scratch_tap "$1"
   link_tap "${scratch}"
-  write_versions "$1" "$2"
+  write_versions "$2" "$3"
 }
 
 main "$@"

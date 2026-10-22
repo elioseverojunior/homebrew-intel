@@ -20,9 +20,11 @@ class DeriveVersionsTest(unittest.TestCase):
         self.fake = self.enterContext(FakeBin())
         self.root = self.directory()
         self.out, self.tap, self.brew = self.root / "out", self.root / "tap", self.root / "brew"
+        self.renders = self.root / "renders"
         self.write(self.tap / "Formula/l/lz4.rb", "lz4 main\n")
         for relpath in ("Formula/z/z3.rb", "Formula/l/llvm.rb", "Formula/x/xz.rb"):
-            self.write(self.out / relpath, f"{relpath} verified\n")
+            self.write(self.out / relpath, f"{relpath} from the host\n")
+            self.write(self.renders / relpath, f"{relpath} trusted render\n")
         built = [{"name": name, "version": "9.9", "relpath": f"Formula/{name[0]}/{name}.rb"} for name in ("z3", "llvm")]
         manifest = {"built": [entry | {"tarball": "t", "json": "j"} for entry in built]}
         manifest |= {"render_only": [{"name": "xz", "relpath": "Formula/x/xz.rb"}], "failed": [], "skipped": []}
@@ -43,9 +45,11 @@ class DeriveVersionsTest(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
 
-    def run_script(self) -> subprocess.CompletedProcess:
-        env = {**self.fake.environment(), "TAP_DIR": str(self.tap)}
-        argv = ["bash", str(SCRIPT), str(self.out), str(self.versions)]
+    def run_script(self, **extra: str) -> subprocess.CompletedProcess:
+        env = {**self.fake.environment(), "TAP_DIR": str(self.tap), **extra}
+        for secret in ("GH_TOKEN", "GITHUB_TOKEN", "PRIVATE_GH_TOKEN", "HOMEBREW_GITHUB_API_TOKEN"):
+            env.setdefault(secret, "")
+        argv = ["bash", str(SCRIPT), str(self.renders), str(self.out), str(self.versions)]
         return subprocess.run(argv, env=env, capture_output=True, text=True, check=False)
 
     def test_reads_each_built_version_from_brew(self):
@@ -62,7 +66,8 @@ class DeriveVersionsTest(unittest.TestCase):
         scratch = link.resolve()
         self.assertNotEqual(scratch, self.tap)
         self.assertEqual((scratch / "Formula/l/lz4.rb").read_text(encoding="utf-8"), "lz4 main\n")
-        self.assertEqual((scratch / "Formula/x/xz.rb").read_text(encoding="utf-8"), "Formula/x/xz.rb verified\n")
+        for relpath in ("Formula/x/xz.rb", "Formula/z/z3.rb"):
+            self.assertEqual((scratch / relpath).read_text(encoding="utf-8"), f"{relpath} trusted render\n")
         self.assertFalse((self.tap / "Formula/z/z3.rb").exists())
 
     def test_wrong_formula_or_brew_failure_fails(self):
@@ -74,6 +79,12 @@ class DeriveVersionsTest(unittest.TestCase):
         self.fake.respond("brew", "--repository", stdout=f"{self.brew}\n")
         self.fake.respond("brew", "info", exit_code=1)
         self.assertNotEqual(self.run_script().returncode, 0)
+
+    def test_refuses_any_token(self):
+        for secret in ("GH_TOKEN", "HOMEBREW_GITHUB_API_TOKEN"):
+            result = self.run_script(**{secret: "t"})
+            self.assertEqual(result.returncode, 2, secret)
+        self.assertEqual(self.fake.argvs(), [])
 
     def test_refuses_an_existing_tap_directory(self):
         (self.brew / "Library/Taps/elioseverojunior/homebrew-intel").mkdir(parents=True)

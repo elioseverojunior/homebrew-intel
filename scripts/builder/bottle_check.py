@@ -1,6 +1,11 @@
 """Check one built formula's bottle block, bottle JSON and tarball against each other.
 
-Part of verify_artifact.py's trust boundary. The block must be exactly what
+Part of verify_artifact.py's trust boundary. syntax_problems() is the strict
+grammar every bottle block must pass before anything else, since the core
+identity check strips the block and could not see code hidden in it: only
+the lines brew writes (a root_url under this tap's releases, an optional
+rebuild, sha256 lines for sequoia or tahoe with a known cellar), nothing else.
+problems() then checks a built formula's block in full. It must be exactly what
 `brew bottle --merge --write` writes for a single Sequoia bottle: a root_url
 equal to this tap's release URL, an optional rebuild and one sequoia sha256
 line with a known cellar, nothing else (a cellar string could interpolate Ruby).
@@ -17,9 +22,17 @@ from typing import NamedTuple
 from urllib.parse import unquote
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tap"))
-from bottles import root_url
+from bottles import ROOT_URL_BASE, root_url
 from transform import TAP
 
+_CELLAR = r'(?:cellar: (?::any|:any_skip_relocation|"/usr/local/Cellar"), +)?'
+SYNTAX = re.compile(
+    r"  bottle do\n"
+    rf'    root_url "{re.escape(ROOT_URL_BASE)}/[a-z0-9][A-Za-z0-9@._+-]*"\n'
+    r"(?:    rebuild [1-9][0-9]*\n)?"
+    rf'(?:    sha256 {_CELLAR}(?:sequoia|tahoe): +"[0-9a-f]{{64}}"\n)+'
+    r"  end\n",
+)
 BLOCK = re.compile(
     r"  bottle do\n"
     r'    root_url "(?P<root_url>[^"\\#\n]+)"\n'
@@ -75,6 +88,11 @@ def _json_problems(document: Mapping, bottle: Bottle, rebuild: int, sha: str) ->
     if spec.get("rebuild", 0) != rebuild or spec["root_url"] != root_url(bottle.name, bottle.version):
         problems.append("bottle JSON rebuild or root_url differs from the block")
     return problems
+
+
+def syntax_problems(block: str) -> list[str]:
+    """Empty when the block holds only lines brew writes for this tap."""
+    return [] if SYNTAX.fullmatch(block) else ["bottle block has a line brew does not write"]
 
 
 def problems(block: str, document: object, bottle: Bottle) -> list[str]:
