@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from collections.abc import Set as AbstractSet
 from pathlib import Path
 
+from bottles import bottle_release_tag, pkg_version, release_tag
 from closure import build_order, expand
 from core_source import CoreSourceError, core_repo, formula_relpath, head_commit, read_formula
 from enabled import ConfigError, Entry, load_enabled
@@ -58,11 +59,18 @@ def read_patch(tap_dir: Path, name: str) -> str | None:
     return None
 
 
-def existing_bottle(path: Path) -> str | None:
-    return extract_bottle_block(path.read_text(encoding="utf-8")) if path.is_file() else None
+def existing_bottle(path: Path, name: str, formulae: Mapping[str, Mapping]) -> str | None:
+    """Return the committed bottle block unless the API says its version is stale."""
+    block = extract_bottle_block(path.read_text(encoding="utf-8")) if path.is_file() else None
+    if block is None or name not in formulae:
+        return block
+    current = release_tag(name, pkg_version(formulae[name]))
+    return block if bottle_release_tag(block) == current else None
 
 
-def render_one(entry: Entry, repo: Path, commit: str, tap_names: AbstractSet[str]) -> str:
+def render_one(
+    entry: Entry, repo: Path, commit: str, tap_names: AbstractSet[str], formulae: Mapping[str, Mapping]
+) -> str:
     patched = entry.kind == "patched"
     source_commit = entry.base if patched and entry.base else commit
     return render_formula(
@@ -71,18 +79,20 @@ def render_one(entry: Entry, repo: Path, commit: str, tap_names: AbstractSet[str
         commit=source_commit,
         tap_names=tap_names,
         patch=read_patch(TAP_ROOT, entry.name) if patched else None,
-        bottle_block=existing_bottle(TAP_ROOT / formula_relpath(entry.name)),
+        bottle_block=existing_bottle(TAP_ROOT / formula_relpath(entry.name), entry.name, formulae),
     )
 
 
-def render_all(order: list[str], entries: Mapping[str, Entry], commit: str | None) -> dict[Path, str]:
+def render_all(
+    order: list[str], entries: Mapping[str, Entry], commit: str | None, formulae: Mapping[str, Mapping]
+) -> dict[Path, str]:
     repo = core_repo()
     commit = commit or head_commit(repo)
     rendered = {}
     for name in order:
         entry = entries.get(name, Entry(name, "generated", None))
         try:
-            rendered[TAP_ROOT / formula_relpath(name)] = render_one(entry, repo, commit, set(order))
+            rendered[TAP_ROOT / formula_relpath(name)] = render_one(entry, repo, commit, set(order), formulae)
         except RENDER_ERRORS as error:
             msg = f"{name}: {error}"
             raise RenderError(msg) from error
@@ -134,7 +144,7 @@ def run(args: argparse.Namespace) -> None:
     elif args.make_patch:
         make_patch_file(args.make_patch, entries, set(order))
     else:
-        write_all(render_all(order, entries, args.core_commit))
+        write_all(render_all(order, entries, args.core_commit, formulae))
 
 
 def main(argv: list[str] | None = None) -> int:

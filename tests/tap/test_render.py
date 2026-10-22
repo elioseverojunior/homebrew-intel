@@ -4,7 +4,7 @@ import drift
 import render
 from transform import TAP, apply_bottle
 
-from tests.tap.fixtures import TAP_BOTTLE, RenderTestCase
+from tests.tap.fixtures import API, BOTTLE, TAP_BOTTLE, RenderTestCase
 
 HEADER_PREFIX = "# Generated from Homebrew/homebrew-core@"
 
@@ -28,6 +28,39 @@ class RenderTest(RenderTestCase):
         code, _, _ = self.run_render()
         self.assertEqual(code, 0)
         self.assertEqual(self.read("Formula/l/lz4.rb"), bottled)
+
+    def render_lz4_bottled(self) -> str:
+        self.enable('[formula.lz4]\nkind = "generated"\n')
+        self.run_render()
+        bottled = apply_bottle(self.read("Formula/l/lz4.rb"), TAP_BOTTLE)
+        self.write(self.tap / "Formula/l/lz4.rb", bottled)
+        return bottled
+
+    def test_render_keeps_bottle_for_same_version(self):
+        bottled = self.render_lz4_bottled()
+        self.assertEqual(self.run_render()[0], 0)
+        self.assertEqual(self.read("Formula/l/lz4.rb"), bottled)
+
+    def test_render_drops_bottle_on_version_bump(self):
+        self.render_lz4_bottled()
+        api = {**API, "lz4": {**API["lz4"], "versions": {"stable": "1.10.1"}}}
+        code, _, _ = self.run_render(api=api)
+        self.assertEqual(code, 0)
+        rendered = self.read("Formula/l/lz4.rb")
+        self.assertTrue(rendered.startswith(HEADER_PREFIX))
+        self.assertNotIn("bottle do", rendered)
+
+    def test_render_keeps_bottle_for_formula_missing_from_api(self):
+        bottled = self.render_lz4_bottled()
+        api = {name: value for name, value in API.items() if name != "lz4"}
+        self.assertEqual(self.run_render(api=api)[0], 0)
+        self.assertEqual(self.read("Formula/l/lz4.rb"), bottled)
+
+    def test_render_drops_bottle_without_root_url(self):
+        self.render_lz4_bottled()
+        self.write(self.tap / "Formula/l/lz4.rb", apply_bottle(self.read("Formula/l/lz4.rb"), BOTTLE))
+        self.assertEqual(self.run_render()[0], 0)
+        self.assertNotIn("bottle do", self.read("Formula/l/lz4.rb"))
 
     def test_render_patch_conflict_writes_nothing(self):
         self.enable(f'[formula.llvm]\nkind = "patched"\nbase = "{self.first}"\n')

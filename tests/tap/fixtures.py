@@ -12,7 +12,8 @@ from unittest import mock
 import render
 
 BOTTLE = '  bottle do\n    sha256 cellar: :any, arm64_sequoia: "aaa"\n  end\n'
-TAP_BOTTLE = '  bottle do\n    root_url "https://example.com"\n    sha256 cellar: :any, sequoia: "bbb"\n  end\n'
+LZ4_ROOT_URL = "https://github.com/elioseverojunior/homebrew-intel/releases/download/lz4-1.10.0"
+TAP_BOTTLE = f'  bottle do\n    root_url "{LZ4_ROOT_URL}"\n    sha256 cellar: :any, sequoia: "bbb"\n  end\n'
 
 
 def formula(class_name: str, *dependencies: str) -> str:
@@ -32,10 +33,11 @@ CORE_FORMULAE = {
 
 UNBOTTLED = {"stable": {"files": {"arm64_sequoia": {}}}}
 BOTTLED = {"stable": {"files": {"sequoia": {}}}}
+VERSIONS = {"stable": "1.10.0"}
 API = {
-    "lz4": {"dependencies": [], "bottle": BOTTLED},
-    "z3": {"dependencies": [], "bottle": UNBOTTLED},
-    "llvm": {"dependencies": ["z3"], "bottle": BOTTLED},
+    "lz4": {"dependencies": [], "bottle": BOTTLED, "versions": VERSIONS},
+    "z3": {"dependencies": [], "bottle": UNBOTTLED, "versions": VERSIONS},
+    "llvm": {"dependencies": ["z3"], "bottle": BOTTLED, "versions": VERSIONS},
 }
 
 
@@ -88,11 +90,11 @@ class TapTestCase(unittest.TestCase):
 
 
 class RenderTestCase(TapTestCase):
-    def run_render(self, *argv: str) -> tuple[int, str, str]:
+    def run_render(self, *argv: str, api: dict | None = None) -> tuple[int, str, str]:
         stdout, stderr = io.StringIO(), io.StringIO()
         with (
             mock.patch.object(render, "TAP_ROOT", self.tap),
-            mock.patch.object(render, "load_formulae", return_value=API),
+            mock.patch.object(render, "load_formulae", return_value=API if api is None else api),
             contextlib.redirect_stdout(stdout),
             contextlib.redirect_stderr(stderr),
         ):
