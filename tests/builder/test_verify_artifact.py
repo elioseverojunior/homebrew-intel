@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 import os
 import subprocess
 import sys
@@ -24,9 +25,10 @@ class VerifyArtifactTest(ArtifactTestCase):
         environment.start()
         self.addCleanup(environment.stop)
 
-    def problems(self) -> list[str]:
+    def problems(self, versions: dict[str, str] | None = None) -> list[str]:
         self.save()
-        return verify_artifact.problems(self.out, self.tap, self.core)
+        derived = versions if versions is not None else {"z3": "1.10.0", "llvm": "1.10.0"}
+        return verify_artifact.problems(self.out, self.tap, self.core, derived)
 
     def assert_refused(self, fragment: str) -> None:
         found = self.problems()
@@ -36,13 +38,42 @@ class VerifyArtifactTest(ArtifactTestCase):
         self.assertEqual(self.problems(), [])
 
     def test_main_exits_zero_or_one(self):
-        argv = ["--artifact", str(self.out), "--tap", str(self.tap)]
+        versions = self.out.parent / "versions.json"
+        versions.write_text(json.dumps({"z3": "1.10.0", "llvm": "1.10.0"}), encoding="utf-8")
+        argv = ["--artifact", str(self.out), "--tap", str(self.tap), "--versions", str(versions)]
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(verify_artifact.main(argv), 0, stderr.getvalue())
             self.edit("Formula/z/z3.rb", "  def install\n", '  def install\n    system "curl", "evil"\n')
             self.assertEqual(verify_artifact.main(argv), 1)
         self.assertIn("verify-artifact: Formula/z/z3.rb", stderr.getvalue())
+
+    def test_manifest_version_must_equal_the_derived_one(self):
+        self.assert_refused_with({"z3": "1.9.0", "llvm": "1.10.0"}, "z3: manifest version 1.10.0 is not 1.9.0")
+        self.assert_refused_with({"llvm": "1.10.0"}, "z3: no derived version")
+
+    def test_versions_with_slash_or_space_are_refused(self):
+        for version in ("1.0/../x", "1.0 x"):
+            self.entry("built", "z3")["version"] = version
+            self.assert_refused(f"invalid version '{version}'")
+
+    def test_two_formulae_may_not_share_a_release_tag(self):
+        self.entry("built", "z3")["version"] = "1-1"
+        clash = dict(self.entry("built", "z3"), name="z3-1", version="1", relpath="Formula/z/z3-1.rb")
+        self.manifest["built"].append(clash)
+        found = self.problems({"z3": "1-1", "z3-1": "1", "llvm": "1.10.0"})
+        self.assertIn("release tag z3-1-1 is claimed more than once", found)
+
+    def test_formulae_only_mode_skips_bottles_and_versions(self):
+        (self.out / "bottles" / self.entry("built", "z3")["tarball"]).write_bytes(b"other")
+        self.save()
+        self.assertEqual(verify_artifact.problems(self.out, self.tap, self.core, None), [])
+        self.edit("Formula/z/z3.rb", "  def install\n", '  def install\n    system "curl", "evil"\n')
+        self.assertNotEqual(verify_artifact.problems(self.out, self.tap, self.core, None), [])
+
+    def assert_refused_with(self, versions: dict[str, str], fragment: str) -> None:
+        found = self.problems(versions)
+        self.assertTrue(any(fragment in problem for problem in found), found)
 
     def test_hand_made_formula_code_is_refused(self):
         self.edit("Formula/l/llvm.rb", "  def install\n", '  def install\n    system "curl", "evil"\n')

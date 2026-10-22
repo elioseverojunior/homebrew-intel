@@ -6,12 +6,17 @@ fails closed unless the manifest is well formed, names this checkout's commit,
 and every built or render-only formula is, bottle block aside, exactly what
 render.py makes from homebrew-core at the manifest's core commit (the entry's
 base and patch for a patched formula), so no hand-made formula code can pass.
-A built formula's bottle block must agree with its tarball and bottle JSON
+A built formula's version must be the one the publish job derived itself from
+the verified formula (derive-versions.sh), never just the manifest's, and its
+bottle block must agree with that version, its tarball and its bottle JSON
 (bottle_check.py); a render-only one keeps main's block or has none.
 
-Usage: verify_artifact.py --artifact DIR [--tap DIR] [--list-commits]. The
-core repository comes from HOMEBREW_CORE_REPO. --list-commits validates the
-manifest and prints the core commits the check reads, one per line, to fetch.
+Usage: verify_artifact.py --artifact DIR [--tap DIR]
+(--formulae-only | --versions JSON | --list-commits). The core repository
+comes from HOMEBREW_CORE_REPO. --formulae-only checks the manifest and the
+formula texts only, before anything evaluates a formula; --versions maps each
+built name to its derived pkg_version for the full check. --list-commits
+validates the manifest and prints the core commits to fetch, one per line.
 """
 
 import argparse
@@ -26,6 +31,7 @@ from typing import NamedTuple
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tap"))
 from bottle_check import Bottle
 from bottle_check import problems as bottle_problems
+from bottles import release_tag
 from core_source import core_repo, formula_relpath, read_formula
 from drift import short_diff
 from enabled import Entry, load_enabled
@@ -55,6 +61,7 @@ class Context(NamedTuple):
     document: Mapping
     entries: Mapping[str, Entry]
     tap_names: set[str]
+    versions: Mapping[str, str] | None
 
 
 def _field_problems(label: str, entry: Mapping, keys: tuple[str, ...]) -> list[str]:
@@ -114,7 +121,8 @@ def _bottle_section_problems(context: Context, section: str, entry: Mapping, tex
     found = _regular_file(tarball, entry["tarball"]) + _regular_file(json_path, entry["json"])
     if found:
         return found
-    bottle = Bottle(entry["name"], entry["version"], tarball, entry["json"])
+    version = (context.versions or {}).get(entry["name"], entry["version"])
+    bottle = Bottle(entry["name"], version, tarball, entry["json"])
     return bottle_problems(blocks[0], json.loads(json_path.read_text(encoding="utf-8")), bottle)
 
 
@@ -127,7 +135,7 @@ def formula_problems(context: Context, section: str, entry: Mapping) -> list[str
         expected = expected_formula(context, entry["name"])
     except RENDER_ERRORS as error:
         return [f"{relpath}: {error}"]
-    found = _bottle_section_problems(context, section, entry, text)
+    found = [] if context.versions is None else _bottle_section_problems(context, section, entry, text)
     if (actual := strip_bottle_block(text)) != expected:
         commit = context.document["core_commit"]
         found.append(f"differs from core@{commit} (+ patch):\n{short_diff(expected, actual, relpath).rstrip()}")
@@ -139,8 +147,24 @@ def checkout_sha(tap: Path) -> str:
     return result.stdout.strip()
 
 
-def problems(out: Path, tap: Path, repo: Path) -> list[str]:
-    """Every reason the artifact must not be published; empty when it may."""
+def version_problems(built: list[Mapping], versions: Mapping[str, str]) -> list[str]:
+    """The manifest's versions must be the derived ones, and release tags unique."""
+    found, tags = [], [release_tag(entry["name"], entry["version"]) for entry in built]
+    for entry in built:
+        derived = versions.get(entry["name"])
+        if derived is None:
+            found.append(f"{entry['name']}: no derived version")
+        elif derived != entry["version"]:
+            found.append(f"{entry['name']}: manifest version {entry['version']} is not {derived}")
+    duplicates = sorted({tag for tag in tags if tags.count(tag) > 1})
+    return found + [f"release tag {tag} is claimed more than once" for tag in duplicates]
+
+
+def problems(out: Path, tap: Path, repo: Path, versions: Mapping[str, str] | None) -> list[str]:
+    """Every reason the artifact must not be published; empty when it may.
+
+    With versions None, only the manifest and the formula texts are checked.
+    """
     try:
         document = json.loads((out / MANIFEST).read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
@@ -153,7 +177,9 @@ def problems(out: Path, tap: Path, repo: Path) -> list[str]:
     found = [f"{path} is not listed in the manifest" for path in paths if path not in listed]
     tap_names = {path.stem for path in formula_files(tap)} | {entry["name"] for _, entry in published}
     entries = {entry.name: entry for entry in load_enabled(tap / "enabled.toml")}
-    context = Context(out, tap, repo, document, entries, tap_names)
+    context = Context(out, tap, repo, document, entries, tap_names, versions)
+    if versions is not None:
+        found += version_problems(document["built"], versions)
     for section, entry in published:
         found += formula_problems(context, section, entry)
     return found
@@ -168,17 +194,33 @@ def needed_commits(out: Path, tap: Path) -> list[str]:
     return [document["core_commit"], *sorted(bases - {document["core_commit"]})]
 
 
-def main(argv: list[str] | None = None) -> int:
+def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--artifact", type=Path, required=True, help="the downloaded builder-out directory")
     parser.add_argument("--tap", type=Path, default=Path(__file__).resolve().parents[2], help="the tap checkout")
-    parser.add_argument("--list-commits", action="store_true", help="print the core commits to fetch")
-    args = parser.parse_args(argv)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--formulae-only", action="store_true", help="check the manifest and formula texts only")
+    mode.add_argument("--versions", type=Path, help="JSON mapping each built name to its derived pkg_version")
+    mode.add_argument("--list-commits", action="store_true", help="print the core commits to fetch")
+    return parser.parse_args(argv)
+
+
+def run(args: argparse.Namespace) -> list[str]:
+    if args.list_commits:
+        print("\n".join(needed_commits(args.artifact, args.tap)))
+        return []
+    versions = None
+    if args.versions:
+        versions = json.loads(args.versions.read_text(encoding="utf-8"))
+        if not isinstance(versions, dict) or not all(isinstance(v, str) for v in versions.values()):
+            return [f"{args.versions}: expected a JSON object of name to version strings"]
+    return problems(args.artifact, args.tap, core_repo(), versions)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
     try:
-        if args.list_commits:
-            print("\n".join(needed_commits(args.artifact, args.tap)))
-            return 0
-        found = problems(args.artifact, args.tap, core_repo())
+        found = run(args)
     except (*RENDER_ERRORS, OSError, ValueError) as error:
         found = [str(error)]
     for problem in found:
@@ -186,7 +228,8 @@ def main(argv: list[str] | None = None) -> int:
     if found:
         print("verify-artifact: refusing to publish this artifact", file=sys.stderr)
         return 1
-    print("verify-artifact: every formula matches its core render and its bottle")
+    if not args.list_commits:
+        print(f"verify-artifact: {'formula texts' if args.formulae_only else 'formulae and bottles'} verified")
     return 0
 
 
