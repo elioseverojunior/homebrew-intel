@@ -257,11 +257,13 @@ if [ "${usage_verbose:-false}" = "true" ]; then
   set -x
 fi
 
-python3 scripts/tap/render.py "$@"
+eval "args=(${usage_args:-})"
+python3 scripts/tap/render.py "${args[@]}"
 '''
 shell = "bash -c"
 usage = '''
 flag "-v --verbose" help="Trace each command (set -x)"
+arg "[args]" var=#true help="Arguments forwarded to render.py, e.g. --print-order"
 '''
 
 [tasks."drift"]
