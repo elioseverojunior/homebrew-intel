@@ -15,3 +15,6 @@ ignore = [
   "S607",   # brew and git are resolved from PATH on purpose
   "T201",   # CLI output
 ]
+
+[lint.per-file-ignores]
+"tests/**" = ["PT009", "PT027"] # unittest-style assertions

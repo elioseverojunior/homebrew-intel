@@ -1,0 +1,303 @@
+[settings]
+color = true
+experimental = true
+idiomatic_version_file = true
+idiomatic_version_file_enable_tools = []
+legacy_version_file = false
+lockfile = true
+not_found_auto_install = true
+quiet = true
+
+[tools]
+actionlint = { version = "latest" }
+gh = { version = "latest" }
+gitleaks = { version = "latest" }
+shellcheck = { version = "latest" }
+ruff = { version = "latest" }
+rumdl = { version = "latest" }
+
+# aqua ships hk for darwin/arm64 but not darwin/amd64, so macOS is narrowed to
+# arm64 with the compound "<os>/<arch>" form — mise parses both halves, and this
+# is the whole platform gate. The separate `arch` key does NOT filter (verified:
+# arch = ["ppc64"] still resolves on an x64 host); it documents intent only.
+"aqua:hk" = { version = "latest", os = [
+    "linux",
+    "windows",
+    "macos/arm64",
+], arch = [
+    "arm64",
+    "x64",
+], locked = false }
+
+[env]
+ARCH = "{{exec(command='uname -m')}}"
+
+# Name the project after the git remote, falling back to the directory.
+# `$PWD` is wrong here: run mise from a subdirectory and the project renames
+# itself. Tera cannot nest `{{ }}` inside `{{ exec(...) }}`, so config_root is
+# spliced in with the `~` concatenation operator. The fallback must sit INSIDE
+# the command substitution -- written as `basename $(git ...) .git || <fb>`,
+# an empty remote makes basename fail on missing operands and the fallback
+# then yields a full path rather than a basename. A TOML multi-line literal
+# (''') avoids escaping the double quotes the shell needs.
+PROJECT_NAME = '''{{ exec(command='basename "$(git config --get remote.origin.url || echo ' ~ config_root ~ ')" .git') }}'''
+
+[hooks]
+enter = { task = "setup" }
+postinstall = '''
+echo "Installed: $MISE_INSTALLED_TOOLS"
+'''
+
+# === Tool Installation ===
+[tasks.setup]
+alias = ["install", "dev", "dev:setup", "dev:up"]
+description = "Install tools, sourcing from Homebrew when it matches the pin"
+run = '''
+set -eo pipefail
+
+# Homebrew is preferred on macOS when present, but ONLY for a tool whose
+# installed version already equals the pin in [tools] above. None of these ship
+# a versioned formula (there is no swiftlint@0.65.0), so brew tracks whatever is
+# current — honouring it blindly would silently break the pinning this file
+# exists to guarantee. On any mismatch the pin wins and mise installs the tool.
+#
+# Formula names only; versions are read back from [tools] so mise.toml stays the
+# single source of truth.
+BREW_TOOLS="actionlint gh gitleaks ruff rumdl shellcheck"
+
+root="$(git rev-parse --show-toplevel)"
+local_cfg="$root/mise.local.toml"
+
+# An empty MISE_DISABLE_TOOLS overrides whatever mise.local.toml sets, so the
+# lockfile is always written from the FULL toolset. A disabled tool is omitted
+# from mise.lock entirely, and a brew machine committing such a lockfile would
+# leave non-brew machines unresolvable. This is why locking no longer needs to
+# delete the local config first.
+MISE_DISABLE_TOOLS= mise lock
+
+have_brew=no
+if [ "$(uname -s)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
+  have_brew=yes
+fi
+
+# One batched call: six separate `brew list` invocations cost roughly 5x more.
+brew_versions() {
+  [ "$have_brew" = yes ] || return 0
+  brew list --versions $BREW_TOOLS 2>/dev/null | sort || true
+}
+
+# `mise ls --current` merges the global config, so intersecting with BREW_TOOLS
+# below keeps this to the project's own tools.
+pins="$(MISE_DISABLE_TOOLS= mise ls --current --json | jq -r 'to_entries[] | "\(.key) \(.value[0].requested_version)"' | sort)"
+
+# Fingerprint every input that decides this file's content. Hashing mise.lock
+# alone is NOT sufficient: Homebrew moving swiftlint 0.65.0 -> 0.66.0 must force
+# a rewrite, and nothing about that touches the lockfile.
+fingerprint() {
+  printf '%s\n' \
+    "v1" "$(uname -s)" "$(uname -m)" "$have_brew" "$pins" "$(brew_versions)" \
+    "$(shasum -a 256 "$root/mise.lock" 2>/dev/null | cut -d" " -f1)" \
+    | shasum -a 256 | cut -d" " -f1
+}
+
+# `mise install` can settle new entries into mise.lock — a first-time install of
+# a version, or a tool added since the last lock — which leaves the fingerprint
+# just written already stale and costs one redundant rebuild on the next run.
+# Re-stamping afterwards makes the cache converge in a single run.
+refresh_fp() {
+  [ -f "$local_cfg" ] || return 0
+  local now tmp
+  now="$(fingerprint)"
+  if grep -qF "# fingerprint: $now" "$local_cfg"; then
+    return 0
+  fi
+  tmp="$(mktemp)"
+  awk -v fp="$now" '/^# fingerprint: /{ print "# fingerprint: " fp; next } { print }' "$local_cfg" > "$tmp"
+  mv "$tmp" "$local_cfg"
+}
+
+fp="$(fingerprint)"
+if [ -f "$local_cfg" ] && grep -qF "# fingerprint: $fp" "$local_cfg"; then
+  echo "mise.local.toml up to date ($(printf '%s' "$fp" | cut -c1-12))"
+  mise install
+  mise deps
+  refresh_fp
+  exit 0
+fi
+
+lookup() { printf '%s\n' "$2" | awk -v t="$1" '$1 == t { print $2 }'; }
+
+brewed=""
+installed_any=no
+if [ "$have_brew" = yes ]; then
+  state="$(brew_versions)"
+  missing=""
+
+  for f in $BREW_TOOLS; do
+    pin="$(lookup "$f" "$pins")"
+    [ -n "$pin" ] || continue
+    inst="$(lookup "$f" "$state")"
+
+    if [ -z "$inst" ]; then
+      missing="$missing $f"
+    elif [ "$pin" = "latest" ] || [ "$pin" = "$inst" ]; then
+      brewed="$brewed $f"
+      echo "brew $f $inst"
+    else
+      echo "mise $f $pin (Homebrew has $inst)"
+    fi
+  done
+
+  # Only tools that are not installed yet need the slow formula API, and they
+  # are queried in a single batched call.
+  if [ -n "$missing" ]; then
+    stables="$(brew info --json=v2 $missing 2>/dev/null | jq -r '.formulae[] | "\(.name) \(.versions.stable)"' || true)"
+    for f in $missing; do
+      pin="$(lookup "$f" "$pins")"
+      stable="$(lookup "$f" "$stables")"
+      if [ -n "$stable" ] && { [ "$pin" = "latest" ] || [ "$pin" = "$stable" ]; }; then
+        brew install "$f"
+        brewed="$brewed $f"
+        installed_any=yes
+        echo "brew $f $stable (installed)"
+      else
+        echo "mise $f $pin${stable:+ (Homebrew has $stable)}"
+      fi
+    done
+  fi
+fi
+
+# Installing changed what brew reports, so the fingerprint must be recomputed or
+# the next run would see a mismatch and redo all of this for nothing.
+[ "$installed_any" = yes ] && fp="$(fingerprint)"
+
+# disable_tools makes mise step aside so its shims stop shadowing Homebrew's
+# bin. Machine-specific, hence mise.local.toml rather than mise.toml.
+{
+  echo "# Generated by \`mise run install\` - machine-specific, not committed."
+  echo "# fingerprint: $fp"
+  if [ -n "$brewed" ]; then
+    echo "# Tools Homebrew satisfies at the pinned version; mise handles the rest."
+    echo "[settings]"
+    printf 'disable_tools = ['
+    sep=""
+    for f in $brewed; do
+      printf '%s"%s"' "$sep" "$f"
+      sep=", "
+    done
+    printf ']\n'
+  fi
+  # No [tools] section is emitted here: platform gating belongs in mise.toml,
+  # where the compound os = [..., "macos/arm64"] form already covers hk. This
+  # file is only ever about stepping aside for the system package manager.
+} > "$local_cfg"
+
+mise lock
+mise install
+mise deps
+refresh_fp
+'''
+shell = "bash -c"
+
+# === Project tasks ===
+[tasks."lint"]
+alias = ["l"]
+description = "Lint Python, shell, workflows and Markdown with zero warnings"
+run = '''
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+if [ "${usage_verbose:-false}" = "true" ]; then
+  set -x
+fi
+
+ruff check scripts tests
+ruff format --check scripts tests
+shellcheck scripts/audit/*.sh
+# actionlint errors out when the repo has no workflows yet
+if compgen -G '.github/workflows/*.y*ml' >/dev/null; then
+  actionlint
+fi
+git ls-files -z '*.md' | xargs -0 rumdl check
+'''
+shell = "bash -c"
+usage = '''
+flag "-v --verbose" help="Trace each command (set -x)"
+'''
+
+[tasks."test"]
+alias = ["t"]
+description = "Run the unittest suite"
+run = '''
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+if [ "${usage_verbose:-false}" = "true" ]; then
+  set -x
+fi
+
+python3 -m unittest discover -s tests -t .
+'''
+shell = "bash -c"
+usage = '''
+flag "-v --verbose" help="Trace each command (set -x)"
+'''
+
+[tasks."render"]
+alias = ["r"]
+description = "Render core formulae into the tap"
+run = '''
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+if [ "${usage_verbose:-false}" = "true" ]; then
+  set -x
+fi
+
+python3 scripts/tap/render.py "$@"
+'''
+shell = "bash -c"
+usage = '''
+flag "-v --verbose" help="Trace each command (set -x)"
+'''
+
+[tasks."drift"]
+alias = ["d"]
+description = "Report tap formulae that drifted from core"
+run = '''
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+if [ "${usage_verbose:-false}" = "true" ]; then
+  set -x
+fi
+
+python3 scripts/tap/drift.py
+'''
+shell = "bash -c"
+usage = '''
+flag "-v --verbose" help="Trace each command (set -x)"
+'''
+
+[tasks."audit"]
+alias = ["a"]
+description = "Rebuild the Intel support audit reports"
+run = '''
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+if [ "${usage_verbose:-false}" = "true" ]; then
+  set -x
+fi
+
+scripts/audit/run.sh
+'''
+shell = "bash -c"
+usage = '''
+flag "-v --verbose" help="Trace each command (set -x)"
+'''
