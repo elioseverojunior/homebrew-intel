@@ -10,14 +10,21 @@ set -Eeuo pipefail
 # <expected-head-sha> is the last commit this run created. Only when the
 # remote branch head is exactly that commit does the script attest it with a
 # successful `bottle-builder` check run whose external_id is that commit too
-# (the trust anchor of verify-bot-pr) and enable squash auto-merge, on a new
-# or an already open pull request. A foreign
-# head gets neither: the pull request is still opened (or left open) for the
-# owner, and the script exits 1 so the run reports it. A failure to create the
-# check run or enable auto-merge only warns; the owner then merges by hand.
+# (the trust anchor of verify-bot-pr) and enable squash auto-merge bound to
+# that commit (--match-head-commit), on a new or an already open bot pull
+# request (same repository, authored by the App; anyone else's pull request on
+# a branch of the same name is ignored). Auto-merge is enabled only while
+# main's ruleset requires the verify-bot-pr check. A foreign head gets neither:
+# the pull request is still opened (or left open) for the owner, and the
+# script exits 1 so the run reports it. A failure to create the check run, a
+# missing ruleset or a failure to enable auto-merge only warns; the owner then
+# merges by hand.
 
 readonly REPO="elioseverojunior/homebrew-intel"
 readonly CHECK_NAME="bottle-builder"
+readonly GATE_CHECK="verify-bot-pr"
+readonly BOT_AUTHOR="app/elios-automator"
+readonly OWNER="elioseverojunior"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly script_dir
 # shellcheck source=scripts/builder/gh-lookup.sh
@@ -58,8 +65,32 @@ commits_ahead() {
   echo "${ahead:-0}"
 }
 
-open_pull_requests() {
-  gh pr list -R "${REPO}" --head "$1" --state open --json number --jq length
+# Prints the number of the open bot pull request for the branch, if any: same
+# repository, authored by the App. A failed lookup prints nothing.
+# shellcheck disable=SC2312 # a failed list reads as none: gh pr create refuses a duplicate itself
+bot_pull_request() {
+  gh pr list -R "${REPO}" --head "$1" --state open --json number,headRepositoryOwner,author 2>/dev/null |
+    python3 -c '
+import json, sys
+owner, author = sys.argv[1:]
+pulls = json.loads(sys.stdin.read().strip() or "[]")
+ours = [p["number"] for p in pulls if p["headRepositoryOwner"]["login"] == owner and p["author"]["login"] == author]
+print(*ours[:1])
+' "${OWNER}" "${BOT_AUTHOR}"
+}
+
+# Succeeds when main's rules require the verify-bot-pr check, without which an
+# auto-merge would wait for nothing but the other checks.
+gate_is_required() {
+  local rules
+  rules="$(gh api "repos/${REPO}/rules/branches/main" 2>/dev/null)" || return 1
+  python3 -c '
+import json, sys
+rules = json.loads(sys.argv[1])
+checks = [c.get("context") for r in rules if r.get("type") == "required_status_checks"
+          for c in (r.get("parameters") or {}).get("required_status_checks") or []]
+sys.exit(0 if sys.argv[2] in checks else 1)
+' "${rules}" "${GATE_CHECK}"
 }
 
 # Succeeds when the remote branch head is the expected commit.
@@ -89,9 +120,17 @@ attest_head() {
   log "warning: could not create the ${CHECK_NAME} check run on $1; verify-bot-pr will block auto-merge"
 }
 
-# Enables auto-merge; a failure (e.g. the repository setting is off) only warns.
+# enable_auto_merge <selector> <expected-head>: squash auto-merge, only of that
+# head and only while the gate is required; a failure (e.g. the repository
+# setting is off) only warns.
 enable_auto_merge() {
-  if ! gh pr merge "$1" --auto --squash -R "${REPO}"
+  # shellcheck disable=SC2310 # a missing gate only warns
+  if ! gate_is_required
+  then
+    log "warning: main's ruleset does not require ${GATE_CHECK}; auto-merge not enabled on $1"
+    return 0
+  fi
+  if ! gh pr merge "$1" --auto --squash --match-head-commit "$2" -R "${REPO}"
   then
     log "warning: could not enable auto-merge on $1; merge it by hand"
   fi
@@ -106,7 +145,7 @@ create_pull_request() {
 
 main() {
   validate_arguments "$@"
-  local branch="$1" expected="$2" summary="$3" ahead trusted=yes selector="$1"
+  local branch="$1" expected="$2" summary="$3" ahead trusted=yes selector
   ahead="$(commits_ahead "${branch}")"
   if [[ "${ahead}" -eq 0 ]]
   then
@@ -116,18 +155,16 @@ main() {
   # shellcheck disable=SC2310 # the mismatch is reported, then the PR still opens
   head_is_expected "${branch}" "${expected}" || trusted=no
   [[ "${trusted}" = no ]] || attest_head "${expected}"
-  # A failed lookup reads as no open pull request: gh pr create refuses a
-  # duplicate itself, so a transient list failure still gets the run its PR.
-  # shellcheck disable=SC2310,SC2312
-  if [[ "$(open_pull_requests "${branch}")" -gt 0 ]]
+  selector="$(bot_pull_request "${branch}")"
+  if [[ -n "${selector}" ]]
   then
-    log "a pull request for ${branch} is already open"
+    log "bot pull request #${selector} for ${branch} is already open"
   else
     selector="$(create_pull_request "${branch}" "${summary}")"
     echo "${selector}"
   fi
   [[ "${trusted}" = yes ]] || return 1
-  enable_auto_merge "${selector}"
+  enable_auto_merge "${selector}" "${expected}"
 }
 
 main "$@"

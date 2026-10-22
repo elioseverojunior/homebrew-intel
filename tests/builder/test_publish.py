@@ -18,8 +18,12 @@ UNAUTHORIZED = {
 }
 HEADLINE = "lz4: add 1.10.0 sequoia bottle"
 PR_URL = f"https://github.com/{REPO}/pull/9"
-AUTO_MERGE = ["gh", "pr", "merge", PR_URL, "--auto", "--squash", "-R", REPO]
 EXPECTED = "e" * 40
+AUTO_MERGE = ["gh", "pr", "merge", PR_URL, "--auto", "--squash", "--match-head-commit", EXPECTED, "-R", REPO]
+RULES = ["gh", "api", f"{API}rules/branches/main"]
+LIST_PRS = ["gh", "pr", "list", "-R", REPO, "--head", BRANCH, "--state", "open"]
+LIST_PRS += ["--json", "number,headRepositoryOwner,author"]
+GATE_RULE = {"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "verify-bot-pr"}]}}
 FOREIGN = "f" * 40
 CHECK_RUN = ["gh", "api", f"{API}check-runs", "-f", "name=bottle-builder", "-f", f"head_sha={EXPECTED}"]
 CHECK_RUN += ["-f", f"external_id={EXPECTED}"]
@@ -156,23 +160,30 @@ class CommitFormulaTest(PublishTest):
         self.assertEqual(self.fake.argvs(), [])
 
 
+def pull(number: int, owner: str = "elioseverojunior", author: str = "app/elios-automator") -> dict:
+    return {"number": number, "headRepositoryOwner": {"login": owner}, "author": {"login": author, "is_bot": True}}
+
+
 class OpenPullRequestTest(PublishTest):
     def setUp(self):
         super().setUp()
         self.summary = self.tap / "summary.md"
         self.summary.write_text("Bottled lz4\n", encoding="utf-8")
 
-    def serve_branch(self, head: str = EXPECTED) -> None:
-        """The branch exists two commits ahead of main, its remote head at `head`."""
+    def serve_branch(self, head: str = EXPECTED, rules: list | None = None) -> None:
+        """The branch exists two commits ahead of main, its remote head at `head`; main has `rules`."""
+        self.fake.respond(*RULES, stdout=json.dumps([GATE_RULE] if rules is None else rules))
         self.fake.serve_git(branches={BRANCH: 2})
         state_file = self.fake.root / "git-state.json"
         state = self.fake.git_state()
         state["heads"][BRANCH] = head
         state_file.write_text(json.dumps(state), encoding="utf-8")
 
+    def open_prs(self, *pulls: dict) -> None:
+        self.fake.respond(*LIST_PRS, stdout=json.dumps(list(pulls)))
+
     def pr_already_open(self) -> None:
-        list_prs = ["gh", "pr", "list", "-R", REPO, "--head", BRANCH, "--state", "open", "--json", "number"]
-        self.fake.respond(*list_prs, "--jq", "length", stdout="1\n")
+        self.open_prs(pull(12))
 
     def open_pr(self, expected: str = EXPECTED) -> subprocess.CompletedProcess:
         return self.run_script("open-pr.sh", BRANCH, expected, str(self.summary))
@@ -192,7 +203,8 @@ class OpenPullRequestTest(PublishTest):
         create += ["--title", "bottles: 2026-10-22 run 7", "--body-file", str(self.summary)]
         argvs = self.fake.argvs()
         self.assertLess(argvs.index(CHECK_RUN), argvs.index(create))
-        self.assertEqual(argvs[-2:], [create, AUTO_MERGE])
+        self.assertEqual(argvs[-1], AUTO_MERGE)
+        self.assertLess(argvs.index(create), argvs.index(RULES))
         self.assertEqual(result.stdout, f"{PR_URL}\n")
 
     def test_foreign_head_gets_no_check_run_nor_auto_merge(self):
@@ -213,7 +225,8 @@ class OpenPullRequestTest(PublishTest):
         self.assertIn("already open", result.stderr)
         self.assertEqual(self.created(), [])
         self.assertIn(CHECK_RUN, self.fake.argvs())
-        self.assertEqual(self.fake.argvs()[-1], ["gh", "pr", "merge", BRANCH, "--auto", "--squash", "-R", REPO])
+        merge = ["gh", "pr", "merge", "12", "--auto", "--squash", "--match-head-commit", EXPECTED, "-R", REPO]
+        self.assertEqual(self.fake.argvs()[-1], merge)
 
     def test_existing_pr_with_foreign_head_is_left_alone(self):
         self.serve_branch(FOREIGN)
@@ -231,6 +244,41 @@ class OpenPullRequestTest(PublishTest):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("warning: could not create the bottle-builder check run", result.stderr)
         self.assertEqual(len(self.created()), 1)
+
+    def test_auto_merge_is_bound_to_the_attested_head(self):
+        self.serve_branch()
+        self.fake.respond("gh", "pr", "create", stdout=f"{PR_URL}\n")
+        self.assertEqual(self.open_pr().returncode, 0)
+        merge = next(argv for argv in self.fake.argvs() if argv[:3] == ["gh", "pr", "merge"])
+        self.assertEqual(merge[merge.index("--match-head-commit") + 1], EXPECTED)
+
+    def test_no_auto_merge_without_the_verify_bot_pr_rule(self):
+        other = {"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "drift"}]}}
+        for rules in ([], [other], [{"type": "pull_request"}]):
+            with self.subTest(rules=rules):
+                self.fake.rules.clear()
+                self.serve_branch(rules=rules)
+                self.fake.respond("gh", "pr", "create", stdout=f"{PR_URL}\n")
+                result = self.open_pr()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse(self.called(["gh", "pr", "merge"]))
+                self.assertIn("does not require verify-bot-pr; auto-merge not enabled", result.stderr)
+
+    def test_failed_ruleset_lookup_skips_auto_merge(self):
+        self.fake.respond(*RULES, stderr="gh: Not Found (HTTP 404)\n", exit_code=1)
+        self.serve_branch()
+        self.fake.respond("gh", "pr", "create", stdout=f"{PR_URL}\n")
+        self.assertEqual(self.open_pr().returncode, 0)
+        self.assertFalse(self.called(["gh", "pr", "merge"]))
+
+    def test_fork_or_human_pr_on_the_same_branch_is_not_ours(self):
+        self.serve_branch()
+        self.open_prs(pull(3, owner="forker"), pull(4, author="someone"))
+        self.fake.respond("gh", "pr", "create", stdout=f"{PR_URL}\n")
+        result = self.open_pr()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.created()), 1)
+        self.assertEqual(self.fake.argvs()[-1], AUTO_MERGE)
 
     def test_auto_merge_failure_only_warns(self):
         self.serve_branch()
