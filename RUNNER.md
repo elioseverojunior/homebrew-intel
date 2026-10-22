@@ -12,8 +12,9 @@ same risk.
 Bottles for formulae that core no longer builds for Intel come from the
 private builder repository, `elioseverojunior/homebrew-intel-private`. Its
 self-hosted runner, `macos-intel` (labels `self-hosted`, `macOS`, `X64`,
-`iMacPro`), runs `scripts/builder/run.sh` from a checkout of this tap and
-opens a pull request here. That repository's `RUNNER.md` documents the runner
+`iMacPro`), runs `scripts/builder/run.sh --build-only` from a checkout of
+this tap with no token; hosted jobs there verify the output and open a pull
+request here. That repository's `RUNNER.md` documents the runner
 and the `runner:*` mise tasks that install, configure and run it
 (`runner:setup`, `runner:start`, `runner:service`, `runner:remove`,
 `runner:status`).

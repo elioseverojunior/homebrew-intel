@@ -111,37 +111,58 @@ rebuilds `reports/` from a fresh API snapshot plus local git history, taps and
   Intel image and is expected to retire around August 2027. Don't add hosted
   labels such as `macos-13` (retired) or `macos-26-intel` (doesn't exist).
 - Bottles are built by the private builder
-  `elioseverojunior/homebrew-intel-private` on a self-hosted runner labelled
-  `iMacPro`, which writes the bottle blocks with `brew bottle --merge
-  --write` and publishes them through a bot pull request (not `brew
-  pr-pull`). Only Sequoia bottles are built; they also pour on Tahoe.
-- For now the runner runs natively on the owner's host from the gitignored
-  `actions-runner/` directory, started by hand with `./run.sh`. Safeguards:
-  never `brew test-bot --cleanup`, `brew cleanup` or `brew autoremove`; set
-  `HOMEBREW_NO_AUTO_UPDATE=1` and `HOMEBREW_NO_INSTALL_CLEANUP=1`; one job at
-  a time. A Sequoia VM remains the target.
+  `elioseverojunior/homebrew-intel-private`, which writes the bottle blocks
+  with `brew bottle --merge --write` and publishes them through a bot pull
+  request (not `brew pr-pull`). Only Sequoia bottles are built; they also
+  pour on Tahoe.
+- For now the self-hosted runner (label `iMacPro`) runs natively on the
+  owner's host. Safeguards: never `brew test-bot --cleanup`, `brew cleanup` or
+  `brew autoremove`; set `HOMEBREW_NO_AUTO_UPDATE=1` and
+  `HOMEBREW_NO_INSTALL_CLEANUP=1`; one run at a time. A Sequoia VM remains
+  the target.
+- No secret ever reaches the build host: formula code runs there as the
+  runner's user and can read any ancestor's environment. Its `build.yml` has
+  four jobs:
+  - `build` (self-hosted, no token): `scripts/builder/run.sh --build-only`
+    renders, plans, builds and bottles, and uploads `.builder/out` (manifest,
+    bottles, rendered formulae, logs) as the `builder-out` artifact. It and
+    `pour.sh` refuse to start when a GitHub token is in the environment.
+  - `verify` (hosted, no permissions): the trust boundary,
+    `scripts/builder/verify_artifact.py`. The build commit must be on `main`
+    and each core commit on homebrew-core's HEAD
+    (`scripts/ci/fetch-core.sh`). Every formula must be, bottle block aside,
+    exactly its core render, and every bottle block must parse as only the
+    lines brew writes, before any formula is evaluated.
+    `scripts/builder/derive-versions.sh` then reads each version with
+    `brew info` from the trusted renders (never an artifact file, with no
+    token in reach), and the full check requires the manifest's versions,
+    root URLs, release tags, sha256 values and file names to agree with it.
+  - `publish` (hosted): repeats the pure check, mints the App token only
+    then, and runs `scripts/builder/publish.sh`: it uploads each bottle to the
+    release `<name>-<pkg_version>`, commits each formula to
+    `bottle/<date>-<run-number>` as a verified bot commit (render-only
+    formulae first), attests the last commit with the `bottle-builder` check
+    run, opens one pull request and one private issue per failed build.
+  - `pour` (self-hosted, no token): swaps each `--build-bottle` keg for a
+    pour of its released bottle, since such a keg would rebuild from source
+    on `reinstall`/`upgrade`.
+- What auto-merges: only the builder's own pull request, and only when
+  `open-pr.sh` finds the branch head is the run's last commit, main's ruleset
+  requires `verify-bot-pr`, and then with `--match-head-commit` bound to that
+  head. It merges after the five required checks (`lint-and-test`,
+  `tap-syntax`, `drift`, `pour-test`, `verify-bot-pr`). Each commit chains on
+  the run's previous one, so a commit pushed by anyone else is never built
+  upon; then the run attests nothing, leaves the pull request to the owner
+  and fails. Re-running the same workflow run fails at its first commit
+  because its branch already exists; dispatch a new run instead.
 - Dispatch a build with `gh workflow run build.yml -R
   elioseverojunior/homebrew-intel-private -f formulae=<name>` (add
-  `-f dry-run=true` to only print the plan). A run uploads each bottle to
-  the release `<name>-<pkg_version>`, commits each bottle block to the branch
-  `bottle/<date>-<run-number>` as a verified bot commit, attests the last of
-  them with the `bottle-builder` check run, and opens one pull request with
-  squash auto-merge, which merges after the five required checks
-  (`lint-and-test`, `tap-syntax`, `drift`, `pour-test`, `verify-bot-pr`).
-  Each commit chains on the run's previous one (the first creates the
-  branch), so a commit pushed by anyone else is never built upon; if the
-  branch head is not the run's own last commit, the run attests nothing,
-  leaves the pull request to the owner and fails. Re-running the same
-  workflow run fails at its first commit because its branch already exists;
-  dispatch a new run instead.
-- After bottling, the builder uninstalls the `--build-bottle` keg on the
-  host and pours the new bottle, since a keg built with `--build-bottle`
-  keeps that option and would rebuild from source on `reinstall`/`upgrade`.
-- Never cancel a run while it builds: the old keg is uninstalled first and
-  restored on failure. If a restore cannot finish, the keg's full name stays
-  in `~/Library/Caches/homebrew-intel-builder/pending-restore`
-  (`$BUILDER_CACHE`); the next run reinstalls it, and no build starts until
-  it is back.
+  `-f dry-run=true` to only print the plan).
+- Never cancel a run while it builds or pours: the old keg is uninstalled
+  first and restored on failure. If a restore cannot finish, the keg's full
+  name stays in `~/Library/Caches/homebrew-intel-builder/pending-restore`
+  (`$BUILDER_CACHE`); the next build or pour reinstalls it, and no keg swap
+  starts until it is back.
 - Never hand-edit `bottle do` blocks; the builder writes them.
 
 ## Git
