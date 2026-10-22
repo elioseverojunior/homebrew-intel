@@ -1,3 +1,5 @@
+import contextlib
+import io
 import unittest
 
 import bottles
@@ -37,3 +39,10 @@ class BottlesTest(unittest.TestCase):
     def test_api_core_commit_rejects_non_sha(self):
         with self.assertRaises(ValueError):
             bottles.api_core_commit([{"tap_git_head": "abc"}])
+
+    def test_cli_root_url(self):
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            code = bottles.main(["root-url", "lz4", "1.10.0"])
+        self.assertEqual(code, 0)
+        self.assertEqual(stdout.getvalue(), bottles.root_url("lz4", "1.10.0") + "\n")

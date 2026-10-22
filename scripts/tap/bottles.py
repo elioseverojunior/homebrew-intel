@@ -1,5 +1,6 @@
 """Bottle release tags, root URLs and package versions for the Intel builder."""
 
+import argparse
 import re
 from collections import Counter
 from collections.abc import Iterable, Mapping
@@ -35,3 +36,18 @@ def api_core_commit(formulae: Iterable[Mapping]) -> str:
         message = "no 40-hex tap_git_head in the API snapshot"
         raise ValueError(message)
     return heads.most_common(1)[0][0]
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    root = commands.add_parser("root-url", help="print the bottle root URL of NAME VERSION")
+    root.add_argument("name")
+    root.add_argument("version", help="package version: <version> or <version>_<revision>")
+    args = parser.parse_args(argv)
+    print(root_url(args.name, args.version))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -215,7 +215,7 @@ fi
 
 ruff check scripts tests
 ruff format --check scripts tests
-shellcheck scripts/audit/*.sh
+shellcheck scripts/audit/*.sh scripts/builder/*.sh
 # actionlint errors out when the repo has no workflows yet
 if compgen -G '.github/workflows/*.y*ml' >/dev/null; then
   actionlint
