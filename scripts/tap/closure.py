@@ -11,7 +11,7 @@ def needs_intel_bottle(formula: Mapping) -> bool:
     return BOTTLED_INTEL_TAGS.isdisjoint(files)
 
 
-def _dependencies(name: str, formulae: Mapping[str, Mapping], *keys: str) -> list[str]:
+def dependencies(name: str, formulae: Mapping[str, Mapping], *keys: str) -> list[str]:
     formula = formulae.get(name, {})
     return [dependency for key in keys for dependency in formula.get(key) or []]
 
@@ -25,7 +25,7 @@ def expand(enabled: Iterable[str], formulae: Mapping[str, Mapping]) -> set[str]:
         if name in visited:
             continue
         visited.add(name)
-        for dependency in _dependencies(name, formulae, "dependencies"):
+        for dependency in dependencies(name, formulae, "dependencies"):
             known = dependency in formulae
             if known and needs_intel_bottle(formulae[dependency]):
                 result.add(dependency)
@@ -36,7 +36,7 @@ def expand(enabled: Iterable[str], formulae: Mapping[str, Mapping]) -> set[str]:
 
 def build_order(names: AbstractSet[str], formulae: Mapping[str, Mapping]) -> list[str]:
     prerequisites = {
-        name: {d for d in _dependencies(name, formulae, "dependencies", "build_dependencies") if d in names}
+        name: {d for d in dependencies(name, formulae, "dependencies", "build_dependencies") if d in names}
         for name in names
     }
     order: list[str] = []
