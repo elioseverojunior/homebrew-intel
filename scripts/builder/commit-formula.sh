@@ -20,15 +20,18 @@ log() {
 }
 
 validate_arguments() {
-  if [[ $# -ne 3 ]]; then
+  if [[ $# -ne 3 ]]
+  then
     log "usage: commit-formula.sh <branch> <name> <headline>"
     exit 2
   fi
-  if [[ ! "$1" =~ ^bottle/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]+$ ]]; then
+  if [[ ! "$1" =~ ^bottle/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]+$ ]]
+  then
     log "invalid branch: '$1'"
     exit 2
   fi
-  if [[ ! "$2" =~ ^[a-z0-9][a-z0-9@._+-]*$ || -z "$3" || -z "${TAP_DIR:-}" ]]; then
+  if [[ ! "$2" =~ ^[a-z0-9][a-z0-9@._+-]*$ || -z "$3" || -z "${TAP_DIR:-}" ]]
+  then
     log "invalid formula name, empty headline or TAP_DIR unset"
     exit 2
   fi
@@ -77,12 +80,14 @@ main() {
   validate_arguments "$@"
   local branch="$1" name="$2" headline="$3" path head
   path="$(formula_path "${name}")"
-  if [[ ! -f "${TAP_DIR}/${path}" ]]; then
+  if [[ ! -f "${TAP_DIR}/${path}" ]]
+  then
     log "${TAP_DIR}/${path} does not exist"
     exit 1
   fi
   head="$(branch_head "${branch}")"
-  if [[ -z "${head}" ]]; then
+  if [[ -z "${head}" ]]
+  then
     create_branch "${branch}"
     head="$(branch_head "${branch}")"
   fi

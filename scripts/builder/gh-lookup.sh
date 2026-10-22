@@ -8,9 +8,11 @@ gh_lookup() {
   local output errors status=0
   errors="$(mktemp)"
   output="$(gh api "$@" 2>"${errors}")" || status=$?
-  if [[ "${status}" -eq 0 ]]; then
+  if [[ "${status}" -eq 0 ]]
+  then
     printf '%s\n' "${output}"
-  elif ! grep -q "HTTP 404" "${errors}"; then
+  elif ! grep -q "HTTP 404" "${errors}"
+  then
     cat "${errors}" >&2
   else
     status=0

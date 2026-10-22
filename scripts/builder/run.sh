@@ -55,7 +55,8 @@ usage() {
 }
 
 parse_arguments() {
-  while [[ $# -gt 0 ]]; do
+  while [[ $# -gt 0 ]]
+  do
     case "$1" in
       --dry-run) dry_run=yes ;;
       --force)
@@ -73,10 +74,12 @@ parse_arguments() {
 # midnight keeps one branch.
 set_branch() {
   local run_number="${GITHUB_RUN_NUMBER:-}"
-  if [[ "${dry_run}" = yes && -z "${run_number}" ]]; then
+  if [[ "${dry_run}" = yes && -z "${run_number}" ]]
+  then
     run_number=0
   fi
-  if [[ ! "${run_number}" =~ ^[0-9]+$ ]]; then
+  if [[ ! "${run_number}" =~ ^[0-9]+$ ]]
+  then
     log "GITHUB_RUN_NUMBER must be a number, got '${run_number}'"
     exit 2
   fi
@@ -91,7 +94,8 @@ restore_taps_link() {
   set +e
   trap - EXIT
   log "restoring ${taps_link} -> ${link_target}"
-  if ln -sfn "${link_target}" "${taps_link}"; then
+  if ln -sfn "${link_target}" "${taps_link}"
+  then
     rm -f "${saved_target}"
   else
     log "could not restore ${taps_link}; point it at ${link_target} by hand"
@@ -107,6 +111,9 @@ locate_taps_link() {
 # True when the link already points at the checkout and no interrupted run
 # saved the original target: the owner's tap clone would be lost, so a real run
 # refuses.
+# A link that cannot be resolved prints nothing, compares unequal and reads as
+# not lost; that is the predicate's answer, not an error to abort on.
+# shellcheck disable=SC2312
 link_target_is_lost() {
   [[ ! -f "${saved_target}" ]] &&
     [[ "$(cd "${taps_link}" 2>/dev/null && pwd -P)" = "$(cd "${TAP_DIR}" && pwd -P)" ]]
@@ -115,11 +122,14 @@ link_target_is_lost() {
 # Sets link_target: the target saved by an interrupted run, else the link's
 # current one, saved atomically before the swap.
 record_link_target() {
-  if link_target_is_lost; then
+  # shellcheck disable=SC2310 # pure predicate
+  if link_target_is_lost
+  then
     log "refusing to start: ${taps_link} already points at ${TAP_DIR}; repoint it at your tap clone"
     exit 1
   fi
-  if [[ -f "${saved_target}" ]]; then
+  if [[ -f "${saved_target}" ]]
+  then
     link_target="$(cat "${saved_target}")"
     log "recovering Taps link from a previous interrupted run (${link_target})"
     return 0
@@ -133,7 +143,8 @@ record_link_target() {
 # refuse rather than replace it.
 swap_taps_link() {
   locate_taps_link
-  if [[ ! -L "${taps_link}" ]]; then
+  if [[ ! -L "${taps_link}" ]]
+  then
     log "refusing to start: ${taps_link} is not a symlink"
     exit 1
   fi
@@ -149,7 +160,8 @@ fetch_snapshot() {
   export HOMEBREW_INTEL_DATA="${run_dir}/api"
   "${TAP_DIR}/scripts/audit/fetch-api.sh" >&2
   core_commit="$(python3 "${TAP_DIR}/scripts/tap/plan.py" commit)"
-  if [[ ! "${core_commit}" =~ ^[0-9a-f]{40}$ ]]; then
+  if [[ ! "${core_commit}" =~ ^[0-9a-f]{40}$ ]]
+  then
     log "plan.py commit printed '${core_commit}', not a commit SHA"
     exit 1
   fi
@@ -162,8 +174,12 @@ recover_pending_restore() {
   local full_name
   full_name="$(cat "${pending_restore}")"
   log "reinstalling ${full_name}, left uninstalled by an interrupted build"
+  # install_keg checks each brew install itself (tap, then core fallback) and its
+  # failure is handled below, so errexit is not needed inside it.
+  # shellcheck disable=SC2310
   if [[ "${full_name}" =~ ^([a-z0-9-]+/[a-z0-9-]+/)?[a-z0-9][a-z0-9@._+-]*$ ]] &&
-    install_keg "${full_name}"; then
+     install_keg "${full_name}"
+  then
     rm -f "${pending_restore}"
     return 0
   fi
@@ -176,7 +192,8 @@ recover_pending_restore() {
 # and clobber the live asset.
 set_origin_head() {
   git -C "${TAP_DIR}" symbolic-ref -q refs/remotes/origin/HEAD >/dev/null && return 0
-  if ! git -C "${TAP_DIR}" rev-parse -q --verify refs/remotes/origin/main >/dev/null; then
+  if ! git -C "${TAP_DIR}" rev-parse -q --verify refs/remotes/origin/main >/dev/null
+  then
     log "warning: no origin/main in ${TAP_DIR}; bottle rebuild numbers may be wrong"
     return 0
   fi
@@ -187,7 +204,8 @@ set_origin_head() {
 # fetches the blobs it reads on demand from the promisor remote.
 sync_core_clone() {
   local clone="${builder_cache}/homebrew-core"
-  if [[ ! -d "${clone}/.git" ]]; then
+  if [[ ! -d "${clone}/.git" ]]
+  then
     git init --quiet "${clone}"
     git -C "${clone}" remote add origin "${core_url}"
   fi
@@ -198,16 +216,20 @@ sync_core_clone() {
 # Prints the Formula/*.rb paths the render added or modified (deletions are
 # left alone).
 changed_formulae() {
-  local line path
-  while IFS= read -r line; do
+  local line path porcelain
+  porcelain="$(git -C "${TAP_DIR}" status --porcelain --untracked-files=all -- Formula)" || return
+  while IFS= read -r line
+  do
     path="${line:3}"
     [[ -n "${line}" && "${line:0:2}" != *D* && "${path}" == *.rb ]] || continue
     printf '%s\n' "${path}"
-  done <<<"$(git -C "${TAP_DIR}" status --porcelain --untracked-files=all -- Formula)"
+  done <<<"${porcelain}"
 }
 
 # True when a tracked file differs from HEAD only in line 1, the generated
-# header naming the core commit.
+# header naming the core commit. A failed read makes the sides differ, so the
+# change is kept: the predicate's safe answer, not an error to abort on.
+# shellcheck disable=SC2312
 header_only_change() {
   git -C "${TAP_DIR}" cat-file -e "HEAD:$1" 2>/dev/null || return 1
   cmp -s <(git -C "${TAP_DIR}" show "HEAD:$1" | tail -n +2) <(tail -n +2 "${TAP_DIR}/$1")
@@ -217,19 +239,24 @@ header_only_change() {
 # committed now only for formulae outside the plan: a planned formula's bottle
 # commit carries its render, so a failed version bump never lands.
 render_and_commit() {
-  local path name
+  local path name changed
   python3 "${TAP_DIR}/scripts/tap/render.py" --core-commit "${core_commit}"
   plan="$(planned_builds)"
-  while IFS= read -r path <&3; do
+  changed="$(changed_formulae)"
+  while IFS= read -r path <&3
+  do
     [[ -n "${path}" ]] || continue
     name="$(basename "${path}" .rb)"
-    if header_only_change "${path}"; then
+    # shellcheck disable=SC2310 # header_only_change and planned are pure predicates
+    if header_only_change "${path}"
+    then
       git -C "${TAP_DIR}" checkout --quiet -- "${path}"
-    elif ! planned "${name}"; then
+    elif ! planned "${name}"
+    then
       "${TAP_DIR}/scripts/builder/commit-formula.sh" "${branch}" "${name}" \
         "${name}: update from core ${core_commit:0:7}"
     fi
-  done 3<<<"$(changed_formulae)"
+  done 3<<<"${changed}"
 }
 
 planned_builds() {
@@ -239,7 +266,8 @@ planned_builds() {
 # True when <name> starts a line of the plan.
 planned() {
   local first rest
-  while read -r first rest; do
+  while read -r first rest
+  do
     [[ "${first}" = "$1" ]] && return 0
   done <<<"${plan}"
   return 1
@@ -271,7 +299,8 @@ tee_to_log() {
 
 open_issue() {
   local name="$1" version="$2" log_file="$3" body="${run_dir}/issue-$1.md"
-  if [[ -z "${PRIVATE_GH_TOKEN:-}" ]]; then
+  if [[ -z "${PRIVATE_GH_TOKEN:-}" ]]
+  then
     log "warning: PRIVATE_GH_TOKEN is unset; no issue opened for ${name}"
     return 0
   fi
@@ -289,14 +318,19 @@ build_one() {
   local name="$1" version="$2" log_file="${log_dir}/$1.log" bottle_dir="${run_dir}/bottles/$1"
   rm -rf "${bottle_dir}"
   log "building ${name} ${version} (log: ${log_file})"
+  # The pipeline's status is the condition by design; tee_to_log only sets a
+  # trap and execs tee, so there is no errexit inside it to lose.
+  # shellcheck disable=SC2310
   if ! "${TAP_DIR}/scripts/builder/build-formula.sh" "${name}" "${version}" "${bottle_dir}" 2>&1 |
-    tee_to_log "${log_file}"; then
+     tee_to_log "${log_file}"
+  then
     record_failed "${name}" "${version}" "build failed"
     open_issue "${name}" "${version}" "${log_file}"
     return 0
   fi
   if ! "${TAP_DIR}/scripts/builder/commit-formula.sh" "${branch}" "${name}" "${name}: add ${version} sequoia bottle" 2>&1 |
-    tee -a "${log_file}"; then
+     tee -a "${log_file}"
+  then
     record_failed "${name}" "${version}" "bottled, but the commit failed"
     return 0
   fi
@@ -307,16 +341,20 @@ build_one() {
 build_planned_formula() {
   local name="$1" version="$2" dependency
   shift 2
-  if [[ ! "${name}" =~ ${NAME_PATTERN} ]]; then
+  if [[ ! "${name}" =~ ${NAME_PATTERN} ]]
+  then
     record_failed "${name}" "${version}" "invalid formula name in the plan"
     return 0
   fi
-  if [[ "${version}" = "-" ]]; then
+  if [[ "${version}" = "-" ]]
+  then
     record_skipped "${name}" "no API entry"
     return 0
   fi
-  for dependency in "$@"; do
-    if [[ "${unbuilt}" == *" ${dependency} "* ]]; then
+  for dependency in "$@"
+  do
+    if [[ "${unbuilt}" == *" ${dependency} "* ]]
+    then
       record_skipped "${name}" "dependency ${dependency} did not build"
       return 0
     fi
@@ -327,7 +365,8 @@ build_planned_formula() {
 build_all() {
   local fields
   mkdir -p "${log_dir}"
-  while read -r -a fields <&3; do
+  while read -r -a fields <&3
+  do
     [[ ${#fields[@]} -ge 2 ]] || continue
     build_planned_formula "${fields[@]}"
   done 3<<<"${plan}"
@@ -351,7 +390,9 @@ print_dry_run() {
   plan="$(planned_builds)"
   locate_taps_link
   echo "dry run: branch ${branch}, core commit ${core_commit}"
-  if link_target_is_lost; then
+  # shellcheck disable=SC2310 # pure predicate
+  if link_target_is_lost
+  then
     echo "${taps_link} already points at ${TAP_DIR} and no target is saved: a real run would refuse"
   fi
   echo "would point ${taps_link} at ${TAP_DIR} and sync ${builder_cache}/homebrew-core"
@@ -369,11 +410,13 @@ main() {
   exec </dev/null
   set_branch
   mkdir -p "${run_dir}"
-  if [[ "${dry_run}" = yes ]]; then
+  if [[ "${dry_run}" = yes ]]
+  then
     print_dry_run
     return 0
   fi
-  if [[ -z "${GH_TOKEN:-}" ]]; then
+  if [[ -z "${GH_TOKEN:-}" ]]
+  then
     log "GH_TOKEN is required"
     exit 2
   fi

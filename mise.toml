@@ -216,6 +216,14 @@ fi
 ruff check scripts tests
 ruff format --check scripts tests
 shellcheck scripts/audit/*.sh scripts/builder/*.sh
+# brew style adds Homebrew's shfmt layout and optional shellcheck checks, which
+# CI's tap-syntax job enforces. Explicit paths: tap-wide style would also scan
+# the gitignored actions-runner/.
+if command -v brew >/dev/null 2>&1; then
+  git ls-files -z '*.sh' | xargs -0 brew style
+else
+  echo "lint: brew not on PATH; skipping brew style (CI tap-syntax runs it)" >&2
+fi
 # actionlint errors out when the repo has no workflows yet
 if compgen -G '.github/workflows/*.y*ml' >/dev/null; then
   actionlint

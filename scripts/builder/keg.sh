@@ -32,7 +32,8 @@ write_atomically() {
 install_keg() {
   local full_name="$1" short_name="${1##*/}"
   brew install "${full_name}" && return 0
-  if [[ "${full_name}" == */* ]]; then
+  if [[ "${full_name}" == */* ]]
+  then
     log "could not install ${full_name}; falling back to core ${short_name}"
     brew install "${short_name}" && return 0
   fi
