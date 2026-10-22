@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -17,6 +21,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: jdx/mise-action@v5
       - run: mise run lint
       - run: mise run test
@@ -31,16 +37,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Fetch the core commits the headers reference
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          commits="$(python3 scripts/tap/drift.py --list-commits)"
+          if [ -z "$commits" ]; then
+            echo "no header commits to fetch"
+            exit 0
+          fi
           git init core
           git -C core remote add origin https://github.com/Homebrew/homebrew-core
-          mapfile -t commits < <(python3 scripts/tap/drift.py --list-commits)
-          if [ "${#commits[@]}" -eq 0 ]; then
-            echo "no header commits to fetch"
-          else
-            git -C core fetch --depth=1 --filter=blob:none origin "${commits[@]}"
-          fi
+          for commit in $commits; do
+            git -C core fetch --depth=1 --filter=blob:none origin "$commit"
+            status="$(gh api "repos/Homebrew/homebrew-core/compare/${commit}...HEAD" --jq .status)"
+            case "$status" in
+              ahead | identical) ;;
+              *)
+                echo "header commit ${commit} is not on homebrew-core HEAD (status: ${status})" >&2
+                exit 1
+                ;;
+            esac
+          done
       - name: Check drift
         run: python3 scripts/tap/drift.py
         env:
@@ -54,21 +74,27 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: Homebrew/actions/setup-homebrew@2026.10.19.1
       - name: Pour changed bottled formulae
         env:
           BASE_REF: ${{ github.base_ref }}
         run: |
-          set -Eeuo pipefail
+          changed="$(git diff --name-only "origin/${BASE_REF}...HEAD" -- Formula)"
+          brew trust elioseverojunior/intel
           found=no
           while IFS= read -r file; do
-            [ -f "$file" ] || continue
+            [ -n "$file" ] && [ -f "$file" ] || continue
             grep -q '^  bottle do' "$file" || continue
             found=yes
             name="$(basename "$file" .rb)"
-            brew install --force-bottle "elioseverojunior/intel/${name}"
+            if [ -d "$(brew --cellar)/${name}" ]; then
+              brew reinstall --force-bottle "elioseverojunior/intel/${name}"
+            else
+              brew install --force-bottle "elioseverojunior/intel/${name}"
+            fi
             brew test "elioseverojunior/intel/${name}"
-          done < <(git diff --name-only "origin/${BASE_REF}...HEAD" -- Formula)
+          done <<< "$changed"
           if [ "$found" = no ]; then
             echo "no bottled formulae changed"
           fi
