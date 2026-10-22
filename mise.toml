@@ -215,7 +215,7 @@ fi
 
 ruff check scripts tests
 ruff format --check scripts tests
-shellcheck scripts/audit/*.sh scripts/builder/*.sh
+shellcheck scripts/audit/*.sh scripts/builder/*.sh scripts/ci/*.sh
 # brew style adds Homebrew's shfmt layout and optional shellcheck checks, which
 # CI's tap-syntax job enforces. Explicit paths: tap-wide style would also scan
 # the gitignored actions-runner/.

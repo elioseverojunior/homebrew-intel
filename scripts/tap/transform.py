@@ -91,13 +91,14 @@ def apply_bottle(body: str, bottle_block: str | None) -> str:
     return "".join([*lines[: marker + 1], bottle_block, *lines[marker + 1 :]])
 
 
-def extract_bottle_block(text: str) -> str | None:
+def bottle_blocks(text: str) -> list[str]:
     lines = _lines(text)
-    spans = _bottle_spans(lines)
-    if not spans:
-        return None
-    start, end = spans[0]
-    return "".join(lines[start:end])
+    return ["".join(lines[start:end]) for start, end in _bottle_spans(lines)]
+
+
+def extract_bottle_block(text: str) -> str | None:
+    blocks = bottle_blocks(text)
+    return blocks[0] if blocks else None
 
 
 def _is_blank(line: str) -> bool:

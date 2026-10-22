@@ -5,6 +5,7 @@ from transform import (
     TAP,
     TransformError,
     apply_bottle,
+    bottle_blocks,
     extract_bottle_block,
     header,
     mark_bottle_block,
@@ -146,6 +147,11 @@ class BottleBlockTest(unittest.TestCase):
         self.assertEqual(extract_bottle_block(applied), BOTTLE)
         self.assertEqual(apply_bottle(self.body, extract_bottle_block(applied)), applied)
         self.assertIsNone(extract_bottle_block(self.body))
+
+    def test_bottle_blocks_lists_every_top_level_block(self):
+        twice = apply_bottle(self.body, BOTTLE) + BOTTLE
+        self.assertEqual(bottle_blocks(twice), [BOTTLE, BOTTLE])
+        self.assertEqual(bottle_blocks(self.body), [])
 
     def test_strip_round_trip(self):
         self.assertEqual(strip_bottle_block(apply_bottle(self.body, BOTTLE)), self.body)

@@ -45,23 +45,8 @@ jobs:
         run: |
           set -Eeuo pipefail
           commits="$(python3 scripts/tap/drift.py --list-commits)"
-          if [ -z "$commits" ]; then
-            echo "no header commits to fetch"
-            exit 0
-          fi
-          git init core
-          git -C core remote add origin https://github.com/Homebrew/homebrew-core
-          for commit in $commits; do
-            git -C core fetch --depth=1 --filter=blob:none origin "$commit"
-            status="$(gh api "repos/Homebrew/homebrew-core/compare/${commit}...HEAD" --jq .status)"
-            case "$status" in
-              ahead | identical) ;;
-              *)
-                echo "header commit ${commit} is not on homebrew-core HEAD (status: ${status})" >&2
-                exit 1
-                ;;
-            esac
-          done
+          read -r -a commit_list <<<"${commits//$'\n'/ }"
+          scripts/ci/fetch-core.sh core ${commit_list[@]+"${commit_list[@]}"}
       - name: Check drift
         run: python3 scripts/tap/drift.py
         env:
