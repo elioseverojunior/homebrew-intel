@@ -34,6 +34,7 @@ FILE = {"filename": "Formula/l/lz4.rb", "status": "modified"}
 CHECK_RUN = {
     "name": "bottle-builder",
     "head_sha": HEAD_SHA,
+    "external_id": HEAD_SHA,
     "status": "completed",
     "conclusion": "success",
     "app": {"slug": "elios-automator"},
@@ -111,6 +112,21 @@ class ProblemsTest(unittest.TestCase):
     def test_check_run_on_another_commit_fails(self):
         self.check_runs[0]["head_sha"] = "b" * 40
         self.assertEqual(self.problems(), [NO_CHECK])
+
+    def test_check_run_with_another_external_id_fails(self):
+        self.check_runs[0]["external_id"] = "c" * 40
+        self.assertEqual(self.problems(), [NO_CHECK])
+
+    def test_check_run_on_an_older_commit_fails(self):
+        # The builder attested an earlier head; the pull request has moved on since.
+        self.pull_request["head"]["sha"] = "d" * 40
+        self.assertEqual(
+            self.problems(), ["head dddddddddddd has no successful bottle-builder check run from elios-automator"]
+        )
+
+    def test_base_other_than_main_fails(self):
+        self.pull_request["base"]["ref"] = "release"
+        self.assertEqual(self.problems(), ["base ref 'release' is not main"])
 
     def test_unsuccessful_or_misnamed_check_run_fails(self):
         for change in ({"conclusion": "failure"}, {"name": "bottle-builder-2"}, {"app": None}):

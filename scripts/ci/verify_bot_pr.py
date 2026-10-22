@@ -1,8 +1,9 @@
 """Decide whether a pull request is a verified bot bottle PR that may auto-merge.
 
 A bot PR passes only when it comes from the builder's GitHub App on a
-same-repository `bottle/<YYYY-MM-DD>-<run>` branch and its head commit carries
-a successful `bottle-builder` check run created by that App. The check run is
+same-repository `bottle/<YYYY-MM-DD>-<run>` branch into `main`, and its head
+commit carries a successful `bottle-builder` check run created by that App
+whose `head_sha` and `external_id` both name that commit. The check run is
 the trust anchor: commit author, committer and verification can be forged by
 anyone with write access, but only the App can create its own check runs, and
 any later push moves the head to a commit without one. The commit checks stay
@@ -33,6 +34,7 @@ CHECK_NAME = "bottle-builder"
 COMMIT_LIMIT = 250
 FILE_LIMIT = 3000
 COMMITTER_LOGIN = "web-flow"
+BASE_REF = "main"
 FORMULA_DIRECTORY = "Formula/"
 BRANCH_PATTERN = re.compile(r"bottle/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]+")
 
@@ -62,6 +64,8 @@ def _origin_problems(pull_request: Mapping) -> list[str]:
     head = (pull_request["head"].get("repo") or {}).get("full_name")
     if head != base:
         problems.append(f"head repository '{head}' is not {base}")
+    if (base_ref := pull_request["base"].get("ref")) != BASE_REF:
+        problems.append(f"base ref '{base_ref}' is not {BASE_REF}")
     ref = pull_request["head"].get("ref")
     if not BRANCH_PATTERN.fullmatch(ref or ""):
         problems.append(f"head ref '{ref}' is not bottle/<YYYY-MM-DD>-<run>")
@@ -93,6 +97,7 @@ def _built_by_the_app(check_run: Mapping, head_sha: str) -> bool:
         and (check_run.get("app") or {}).get("slug") == APP_SLUG
         and check_run.get("conclusion") == "success"
         and check_run.get("head_sha") == head_sha
+        and check_run.get("external_id") == head_sha
     )
 
 

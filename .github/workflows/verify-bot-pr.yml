@@ -7,7 +7,8 @@ name: verify-bot-pr
 # here: the job only reads its metadata through the API.
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review]
+    # edited: retargeting the base branch must re-run the gate.
+    types: [opened, edited, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
