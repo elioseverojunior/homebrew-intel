@@ -95,19 +95,50 @@ rebuilds `reports/` from a fresh API snapshot plus local git history, taps and
 - Public CI (`.github/workflows/tests.yml`) runs on hosted runners only:
   `lint-and-test`, `tap-syntax` and `drift` on Ubuntu, and `pour-test` on
   `macos-15-intel`. Never run a job from this repository on the iMac.
+- `verify-bot-pr` (`.github/workflows/verify-bot-pr.yml`) is the auto-merge
+  gate. It runs on `pull_request_target`, so the base branch's workflow and
+  `scripts/ci/verify_bot_pr.py` judge every pull request; it must never check
+  out or run pull request code. Human pull requests pass as skipped and need
+  the owner to merge. A pull request by `elios-automator[bot]` passes only
+  when it comes from a same-repository `bottle/<date>-<n>` branch into
+  `main`, only touches `Formula/`, its commit and file counts match the
+  event (below the API listing limits), its commits are verified bot commits,
+  and its head carries a successful `bottle-builder` check run from the
+  `elios-automator` App whose `head_sha` and `external_id` are that head.
+  That check run is the trust anchor; any later push to the branch removes
+  it and auto-merge waits.
 - The only GitHub-hosted Intel runner is `macos-15-intel`. It is the last
   Intel image and is expected to retire around August 2027. Don't add hosted
   labels such as `macos-13` (retired) or `macos-26-intel` (doesn't exist).
 - Bottles are built by the private builder
   `elioseverojunior/homebrew-intel-private` on a self-hosted runner labelled
-  `iMacPro`, and published with `brew pr-pull`. Only Sequoia bottles are
-  built; they also pour on Tahoe.
+  `iMacPro`, which writes the bottle blocks with `brew bottle --merge
+  --write` and publishes them through a bot pull request (not `brew
+  pr-pull`). Only Sequoia bottles are built; they also pour on Tahoe.
 - For now the runner runs natively on the owner's host from the gitignored
   `actions-runner/` directory, started by hand with `./run.sh`. Safeguards:
   never `brew test-bot --cleanup`, `brew cleanup` or `brew autoremove`; set
   `HOMEBREW_NO_AUTO_UPDATE=1` and `HOMEBREW_NO_INSTALL_CLEANUP=1`; one job at
   a time. A Sequoia VM remains the target.
-- Never hand-edit `bottle do` blocks; `pr-pull` writes them.
+- Dispatch a build with `gh workflow run build.yml -R
+  elioseverojunior/homebrew-intel-private -f formulae=<name>` (add
+  `-f dry-run=true` to only print the plan). A run uploads each bottle to
+  the release `<name>-<pkg_version>`, commits each bottle block to the branch
+  `bottle/<date>-<run-number>` as a verified bot commit, attests the last of
+  them with the `bottle-builder` check run, and opens one pull request with
+  squash auto-merge, which merges after the five required checks
+  (`lint-and-test`, `tap-syntax`, `drift`, `pour-test`, `verify-bot-pr`).
+  If the branch head is not the run's own last commit, the run attests
+  nothing, leaves the pull request to the owner and fails.
+- After bottling, the builder uninstalls the `--build-bottle` keg on the
+  host and pours the new bottle, since a keg built with `--build-bottle`
+  keeps that option and would rebuild from source on `reinstall`/`upgrade`.
+- Never cancel a run while it builds: the old keg is uninstalled first and
+  restored on failure. If a restore cannot finish, the keg's full name stays
+  in `~/Library/Caches/homebrew-intel-builder/pending-restore`
+  (`$BUILDER_CACHE`); the next run reinstalls it, and no build starts until
+  it is back.
+- Never hand-edit `bottle do` blocks; the builder writes them.
 
 ## Git
 

@@ -11,8 +11,10 @@ instead of compiling. A Sequoia bottle also pours on Tahoe. It can also carry
 formulae that core removed, disabled or restricted to arm64 when the software
 still works on Intel; those have a small reviewed patch.
 
-**Status:** phase 1. Formulae are generated and checked, but no bottles are
-published yet, so installs build from source (for example `lz4`).
+**Status:** bottles are being published. `lz4` ships an Intel Sequoia
+bottle; other formulae still build from source until theirs is published. A
+keg you built from source with `--build-bottle` keeps building on
+`reinstall`, so switch it with `brew uninstall` and then `brew install`.
 
 Formulae in `Formula/` are generated from homebrew-core and must not be edited
 by hand. See `CLAUDE.md` for the workflow.
