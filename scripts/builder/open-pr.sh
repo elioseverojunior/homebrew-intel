@@ -14,7 +14,8 @@ set -Eeuo pipefail
 # that commit (--match-head-commit), on a new or an already open bot pull
 # request (same repository, authored by the App; anyone else's pull request on
 # a branch of the same name is ignored). Auto-merge is enabled only while
-# main's ruleset requires the verify-bot-pr check. A foreign head gets neither:
+# main's ruleset requires the verify-bot-pr check from GitHub Actions
+# (integration id 15368). A foreign head gets neither:
 # the pull request is still opened (or left open) for the owner, and the
 # script exits 1 so the run reports it. A failure to create the check run, a
 # missing ruleset or a failure to enable auto-merge only warns; the owner then
@@ -23,6 +24,9 @@ set -Eeuo pipefail
 readonly REPO="elioseverojunior/homebrew-intel"
 readonly CHECK_NAME="bottle-builder"
 readonly GATE_CHECK="verify-bot-pr"
+# GitHub Actions' App id: the required check must come from a workflow run, so
+# no other App or commit status can satisfy it.
+readonly GATE_INTEGRATION_ID=15368
 readonly BOT_AUTHOR="app/elios-automator"
 readonly OWNER="elioseverojunior"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -79,18 +83,19 @@ print(*ours[:1])
 ' "${OWNER}" "${BOT_AUTHOR}"
 }
 
-# Succeeds when main's rules require the verify-bot-pr check, without which an
-# auto-merge would wait for nothing but the other checks.
+# Succeeds when main's rules require the verify-bot-pr check from GitHub
+# Actions, without which an auto-merge would wait for nothing but the other
+# checks (or for a check anyone could report).
 gate_is_required() {
   local rules
   rules="$(gh api "repos/${REPO}/rules/branches/main" 2>/dev/null)" || return 1
   python3 -c '
 import json, sys
-rules = json.loads(sys.argv[1])
-checks = [c.get("context") for r in rules if r.get("type") == "required_status_checks"
+rules, context, integration = json.loads(sys.argv[1]), sys.argv[2], int(sys.argv[3])
+checks = [(c.get("context"), c.get("integration_id")) for r in rules if r.get("type") == "required_status_checks"
           for c in (r.get("parameters") or {}).get("required_status_checks") or []]
-sys.exit(0 if sys.argv[2] in checks else 1)
-' "${rules}" "${GATE_CHECK}"
+sys.exit(0 if (context, integration) in checks else 1)
+' "${rules}" "${GATE_CHECK}" "${GATE_INTEGRATION_ID}"
 }
 
 # Succeeds when the remote branch head is the expected commit.

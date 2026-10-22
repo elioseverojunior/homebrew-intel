@@ -18,7 +18,14 @@ AUTO_MERGE = ["gh", "pr", "merge", PR_URL, "--auto", "--squash", "--match-head-c
 RULES = ["gh", "api", f"{API}rules/branches/main"]
 LIST_PRS = ["gh", "pr", "list", "-R", REPO, "--head", BRANCH, "--state", "open"]
 LIST_PRS += ["--json", "number,headRepositoryOwner,author"]
-GATE_RULE = {"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "verify-bot-pr"}]}}
+GATE = {"context": "verify-bot-pr", "integration_id": 15368}
+
+
+def gate_rule(*checks: dict) -> dict:
+    return {"type": "required_status_checks", "parameters": {"required_status_checks": list(checks)}}
+
+
+GATE_RULE = gate_rule(GATE)
 
 
 def pull(number: int, owner: str = "elioseverojunior", author: str = "app/elios-automator") -> dict:
@@ -114,8 +121,10 @@ class OpenPullRequestTest(PublishTest):
         self.assertEqual(merge[merge.index("--match-head-commit") + 1], EXPECTED)
 
     def test_no_auto_merge_without_the_verify_bot_pr_rule(self):
-        other = {"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "drift"}]}}
-        for rules in ([], [other], [{"type": "pull_request"}]):
+        other = gate_rule({"context": "drift", "integration_id": 15368})
+        any_source = gate_rule({"context": "verify-bot-pr"})
+        other_app = gate_rule({"context": "verify-bot-pr", "integration_id": 4348245})
+        for rules in ([], [other], [{"type": "pull_request"}], [any_source], [other_app]):
             with self.subTest(rules=rules):
                 self.fake.rules.clear()
                 self.serve_branch(rules=rules)
