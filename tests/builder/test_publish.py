@@ -17,6 +17,8 @@ UNAUTHORIZED = {
     "exit_code": 1,
 }
 HEADLINE = "lz4: add 1.10.0 sequoia bottle"
+PR_URL = f"https://github.com/{REPO}/pull/9"
+AUTO_MERGE = ["gh", "pr", "merge", PR_URL, "--auto", "--squash", "-R", REPO]
 
 
 class PublishTest(unittest.TestCase):
@@ -108,13 +110,30 @@ class OpenPullRequestTest(PublishTest):
     def created(self) -> list[list[str]]:
         return [argv for argv in self.fake.argvs() if argv[:3] == ["gh", "pr", "create"]]
 
-    def test_open_pr_args(self):
+    def test_open_pr_args_then_auto_merge(self):
         self.fake.serve_git(branches={BRANCH: 2})
+        self.fake.respond("gh", "pr", "create", stdout=f"{PR_URL}\n")
         result = self.open_pr()
         self.assertEqual(result.returncode, 0, result.stderr)
         create = ["gh", "pr", "create", "-R", REPO, "--base", "main", "--head", BRANCH]
         create += ["--title", "bottles: 2026-10-22 run 7", "--body-file", str(self.summary)]
-        self.assertEqual(self.fake.argvs()[-1], create)
+        self.assertEqual(self.fake.argvs()[-2:], [create, AUTO_MERGE])
+        self.assertEqual(result.stdout, f"{PR_URL}\n")
+
+    def test_auto_merge_failure_only_warns(self):
+        self.fake.serve_git(branches={BRANCH: 2})
+        self.fake.respond("gh", "pr", "create", stdout=f"{PR_URL}\n")
+        self.fake.respond(*AUTO_MERGE, stderr="auto-merge is not allowed for this repository\n", exit_code=1)
+        result = self.open_pr()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.fake.argvs()[-1], AUTO_MERGE)
+        self.assertIn(f"warning: could not enable auto-merge on {PR_URL}", result.stderr)
+
+    def test_failed_create_does_not_auto_merge(self):
+        self.fake.serve_git(branches={BRANCH: 2})
+        self.fake.fail("gh", "pr", "create")
+        self.assertNotEqual(self.open_pr().returncode, 0)
+        self.assertNotIn(AUTO_MERGE[:3], [argv[:3] for argv in self.fake.argvs()])
 
     def test_open_pr_noop_without_commits(self):
         for branches in ({}, {BRANCH: 0}):
@@ -124,6 +143,7 @@ class OpenPullRequestTest(PublishTest):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn("nothing to open", result.stderr)
                 self.assertEqual(self.created(), [])
+                self.assertNotIn(AUTO_MERGE[:3], [argv[:3] for argv in self.fake.argvs()])
 
     def test_non_404_compare_failure_aborts(self):
         self.fake.serve_git(branches={BRANCH: 2})

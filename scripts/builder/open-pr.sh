@@ -7,6 +7,9 @@ set -Eeuo pipefail
 # Env: GH_TOKEN. The title comes from the branch name (bottle/<date>-<run>), so a
 # run that crosses midnight stays consistent. Does nothing when the branch is
 # missing, has no commits ahead of main, or already has an open pull request.
+# A new pull request gets auto-merge (squash) enabled; it merges once the
+# required checks, including verify-bot-pr, pass. If auto-merge cannot be
+# enabled the run still succeeds and the owner merges by hand.
 
 readonly REPO="elioseverojunior/homebrew-intel"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -48,9 +51,17 @@ open_pull_requests() {
   gh pr list -R "${REPO}" --head "$1" --state open --json number --jq length
 }
 
+# Enables auto-merge; a failure (e.g. the repository setting is off) only warns.
+enable_auto_merge() {
+  if ! gh pr merge "$1" --auto --squash -R "${REPO}"
+  then
+    log "warning: could not enable auto-merge on $1; merge it by hand"
+  fi
+}
+
 main() {
   validate_arguments "$@"
-  local branch="$1" summary="$2" ahead title
+  local branch="$1" summary="$2" ahead title url
   ahead="$(commits_ahead "${branch}")"
   if [[ "${ahead}" -eq 0 ]]
   then
@@ -66,8 +77,10 @@ main() {
     return 0
   fi
   title="${branch#bottle/}"
-  gh pr create -R "${REPO}" --base main --head "${branch}" \
-    --title "bottles: ${title:0:10} run ${title:11}" --body-file "${summary}"
+  url="$(gh pr create -R "${REPO}" --base main --head "${branch}" \
+    --title "bottles: ${title:0:10} run ${title:11}" --body-file "${summary}")"
+  echo "${url}"
+  enable_auto_merge "${url}"
 }
 
 main "$@"
