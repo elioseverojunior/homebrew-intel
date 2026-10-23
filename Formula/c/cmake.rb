@@ -1,4 +1,4 @@
-# Generated from Homebrew/homebrew-core@350e3d8834021ff593eea208a2e17963ea6e18b0 by scripts/tap/render.py; do not edit.
+# Generated from Homebrew/homebrew-core@3b7983907359f7548f4fdb121b36a1075623bc6d by scripts/tap/render.py; do not edit.
 # Hand-written changes belong in patches/cmake.patch.
 class Cmake < Formula
   desc "Cross-platform make"
@@ -17,6 +17,12 @@ class Cmake < Formula
   livecheck do
     url "https://cmake.org/download/"
     regex(/href=.*?cmake[._-]v?(\d+(?:\.\d+)+)\.t/i)
+  end
+
+  bottle do
+    root_url "https://github.com/elioseverojunior/homebrew-intel/releases/download/cmake-4.4.4"
+    rebuild 1
+    sha256 cellar: :any_skip_relocation, sequoia: "d1f821206d762cd77c1121441f82c1376474b3f90fe248d0753a3f13d8e68c8a"
   end
 
   # bottle block: written by brew pr-pull
