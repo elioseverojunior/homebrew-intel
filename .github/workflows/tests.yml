@@ -79,6 +79,9 @@ jobs:
             grep -qxF "$name" <<< "$changed" || continue
             grep -qs '^  bottle do' Formula/*/"${name}.rb" || continue
             found=yes
+            # brew test refuses to run without test dependencies, and neither
+            # install nor reinstall adds them unasked.
+            brew install --only-dependencies --include-test "elioseverojunior/intel/${name}"
             if [ -d "$(brew --cellar)/${name}" ]; then
               brew reinstall --force-bottle "elioseverojunior/intel/${name}"
             else
