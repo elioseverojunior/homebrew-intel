@@ -28,9 +28,11 @@ header_only_change() {
   cmp -s <(git -C "${TAP_DIR}" show "HEAD:$1" | tail -n +2) <(tail -n +2 "${TAP_DIR}/$1")
 }
 
-# Renders, then plans. A header-only change is reverted. Other changes are
-# recorded as render-only for formulae outside the plan: a planned formula goes
-# in with its bottle, so a failed version bump never lands.
+# Renders, then plans. A planned formula goes in with its bottle, so a failed
+# version bump never lands; it keeps the render's header, since verify checks
+# every published formula against the run's core commit. Outside the plan, a
+# header-only change is reverted and any other change is recorded as
+# render-only.
 render_and_classify() {
   local path name changed
   python3 "${TAP_DIR}/scripts/tap/render.py" --core-commit "${core_commit}"
@@ -41,11 +43,13 @@ render_and_classify() {
     [[ -n "${path}" ]] || continue
     name="$(basename "${path}" .rb)"
     # shellcheck disable=SC2310 # header_only_change and planned are pure predicates
-    if header_only_change "${path}"
+    if planned "${name}"
+    then
+      continue
+    elif header_only_change "${path}"
     then
       git -C "${TAP_DIR}" checkout --quiet -- "${path}"
-    elif ! planned "${name}"
-    then
+    else
       manifest render-only "${out_dir}" "${TAP_DIR}" "${name}"
     fi
   done 3<<<"${changed}"

@@ -66,6 +66,9 @@ elif script == "render.py":
         path.write_text(text, encoding="utf-8")
 elif script == "build-formula.sh":
     print(f"building {{args[0]}}", flush=True)
+    built = Path(os.environ["TAP_DIR"]) / formula_relpath(args[0])
+    if built.is_file():
+        print(f"formula header: {{built.read_text(encoding='utf-8').splitlines()[0]}}", flush=True)
     if args[0] in config.get("drain", []):
         sys.stdin.read()
     time.sleep(config["sleep"].get(args[0], 0))

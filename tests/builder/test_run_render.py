@@ -40,6 +40,13 @@ class RenderClassifyTest(RunTest):
         self.assertEqual(self.section("render_only"), [])
         self.assertEqual(git("-C", str(self.tap), "status", "--porcelain", "--", "Formula"), "")
 
+    def test_planned_header_only_change_keeps_the_pinned_header(self):
+        self.configure(plan="z3 4.15\n", render={"Formula/z/z3.rb": "# header b\nz3\n"})
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.section("built"), ["z3"])
+        self.assertIn("formula header: # header b\n", (self.out / "logs/z3.log").read_text(encoding="utf-8"))
+
     def test_body_change_after_header_is_render_only(self):
         self.configure(plan="", render={"Formula/z/z3.rb": "# header b\nz3 v2\n"})
         self.assertEqual(self.run_script().returncode, 0)
