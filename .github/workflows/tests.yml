@@ -79,6 +79,12 @@ jobs:
             grep -qxF "$name" <<< "$changed" || continue
             grep -qs '^  bottle do' Formula/*/"${name}.rb" || continue
             found=yes
+            # The image ships some formulae from homebrew/core (cmake, for
+            # one); brew refuses a same-named tap formula next to them.
+            receipt="$(brew --prefix)/opt/${name}/INSTALL_RECEIPT.json"
+            if [ -f "$receipt" ] && ! grep -qF '"tap":"elioseverojunior/intel"' <(tr -d ' \n' < "$receipt"); then
+              brew uninstall --ignore-dependencies "$name"
+            fi
             # brew test refuses to run without test dependencies, and neither
             # install nor reinstall adds them unasked.
             brew install --only-dependencies --include-test "elioseverojunior/intel/${name}"
