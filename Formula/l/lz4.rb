@@ -1,4 +1,4 @@
-# Generated from Homebrew/homebrew-core@3b7983907359f7548f4fdb121b36a1075623bc6d by scripts/tap/render.py; do not edit.
+# Generated from Homebrew/homebrew-core@1abdb18fb70f59fea5797571e7fd964d2f67049d by scripts/tap/render.py; do not edit.
 # Hand-written changes belong in patches/lz4.patch.
 class Lz4 < Formula
   desc "Extremely Fast Compression algorithm"
@@ -17,9 +17,9 @@ class Lz4 < Formula
 
   # bottle block: written by brew pr-pull
   bottle do
-    root_url "https://github.com/elioseverojunior/homebrew-intel/releases/download/lz4-1.10.0"
-    rebuild 2
-    sha256 cellar: :any, sequoia: "e052e8b48414243e3c99069453af52436b36f232bef34bee8aab1da2b714f188"
+    root_url "https://github.com/homebrew-intel/homebrew-tap/releases/download/lz4-1.10.0"
+    rebuild 3
+    sha256 cellar: :any, sequoia: "c2893f1952eaff740c87d2d5c96d59acb0aa6b0985ef277eb2fc97e4ee989ac1"
   end
 
   depends_on "homebrew-intel/tap/cmake" => :build
