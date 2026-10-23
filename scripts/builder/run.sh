@@ -224,8 +224,8 @@ print_dry_run() {
     echo "${taps_link} already points at ${TAP_DIR} and no target is saved: a real run would refuse"
   fi
   echo "would point ${taps_link} at ${TAP_DIR} and sync ${builder_cache}/homebrew-core"
-  echo "would render at ${core_commit:0:7}, revert header-only changes and record each other"
-  echo "changed formula that is not planned (a planned one goes in with its bottle)"
+  echo "would render at ${core_commit:0:7}: a planned formula keeps its render, pinned header included,"
+  echo "and goes in with its bottle; outside the plan, header-only changes are reverted and other changes recorded render-only"
   echo "plan (before render, so formulae the render changes may be missing):"
   echo "${plan:-  nothing to build}"
   echo "would build and bottle each in order into ${out_dir} for the publish job"

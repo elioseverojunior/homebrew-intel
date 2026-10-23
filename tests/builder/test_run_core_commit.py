@@ -34,6 +34,8 @@ class PinnedCoreCommitTest(RunTest):
         result = self.run_script("--dry-run", "--core-commit", pinned)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(f"dry run: core commit {pinned}", result.stdout)
+        self.assertIn("a planned formula keeps its render, pinned header included", result.stdout)
+        self.assertIn("header-only changes are reverted and other changes recorded render-only", result.stdout)
 
     def test_invalid_core_commit_is_refused(self):
         for args in (("--core-commit",), ("--core-commit", "abc"), ("--core-commit", "A" * 40)):
