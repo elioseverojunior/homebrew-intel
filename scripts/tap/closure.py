@@ -4,6 +4,11 @@ from collections.abc import Iterable, Mapping
 from collections.abc import Set as AbstractSet
 
 BOTTLED_INTEL_TAGS = frozenset({"all", "sequoia", "sonoma", "ventura", "monterey", "big_sur"})
+# The API's top-level dependency lists describe ARM macOS. What differs on the
+# Intel system the bottles are built on sits in formula["variations"][tag],
+# where each key present replaces the top-level one outright, as brew's
+# Homebrew::API.merge_variations does with a shallow Hash#merge.
+INTEL_VARIATION = "sequoia"
 # What building, testing and bottling a formula on the Intel host installs:
 # brew pours its runtime dependencies and builds none of its build or test
 # dependencies itself (`brew test` refuses to run without the test ones).
@@ -17,7 +22,8 @@ def needs_intel_bottle(formula: Mapping) -> bool:
 
 def dependencies(name: str, formulae: Mapping[str, Mapping], *keys: str) -> list[str]:
     formula = formulae.get(name, {})
-    return [dependency for key in keys for dependency in formula.get(key) or []]
+    intel = (formula.get("variations") or {}).get(INTEL_VARIATION) or {}
+    return [dependency for key in keys for dependency in intel.get(key, formula.get(key)) or []]
 
 
 def expand(enabled: Iterable[str], formulae: Mapping[str, Mapping]) -> set[str]:

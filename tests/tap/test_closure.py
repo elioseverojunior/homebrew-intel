@@ -1,6 +1,6 @@
 import unittest
 
-from closure import BOTTLED_INTEL_TAGS, build_order, expand, needs_intel_bottle
+from closure import BOTTLED_INTEL_TAGS, INTEL_VARIATION, build_order, dependencies, expand, needs_intel_bottle
 
 
 def formula(name, deps=(), build_deps=(), tags=(), test_deps=()):
@@ -11,6 +11,11 @@ def formula(name, deps=(), build_deps=(), tags=(), test_deps=()):
         "test_dependencies": list(test_deps),
         "bottle": {"stable": {"files": {tag: {} for tag in tags}}} if tags else {},
     }
+
+
+def on_intel(item, **keys):
+    """Give a formula dict an Intel variation, as the API writes on_intel/on_arm."""
+    return {**item, "variations": {INTEL_VARIATION: keys}}
 
 
 def index(*formulae):
@@ -27,6 +32,29 @@ class NeedsIntelBottleTest(unittest.TestCase):
 
     def test_missing_bottle_key(self):
         self.assertTrue(needs_intel_bottle({"name": "a"}))
+
+
+class DependenciesTest(unittest.TestCase):
+    def test_intel_variation_replaces_each_key_it_names(self):
+        # Modelled on gnu-apl (arm-only llvm@21) and gdb (Intel-only expat).
+        formulae = index(
+            on_intel(
+                formula("a", deps=["gmp"], build_deps=["pkgconf", "llvm@21"], test_deps=["t"]),
+                dependencies=["gmp", "expat"],
+                build_dependencies=["pkgconf"],
+            )
+        )
+        self.assertEqual(dependencies("a", formulae, "dependencies"), ["gmp", "expat"])
+        self.assertEqual(dependencies("a", formulae, "build_dependencies"), ["pkgconf"])
+        self.assertEqual(dependencies("a", formulae, "test_dependencies"), ["t"])
+
+    def test_other_variations_are_ignored(self):
+        formulae = index(formula("a", deps=["b"]))
+        formulae["a"]["variations"] = {"arm64_sequoia": {"dependencies": ["c"]}, "x86_64_linux": {"dependencies": []}}
+        self.assertEqual(dependencies("a", formulae, "dependencies"), ["b"])
+
+    def test_unknown_formula_has_no_dependencies(self):
+        self.assertEqual(dependencies("a", {}, "dependencies"), [])
 
 
 class ExpandTest(unittest.TestCase):
@@ -77,6 +105,19 @@ class ExpandTest(unittest.TestCase):
         )
         self.assertEqual(expand(["a"], formulae), {"a", "t"})
 
+    def test_expand_uses_intel_dependencies(self):
+        # Modelled on gnu-apl (arm-only llvm@21 build dep), ddd (Intel-only
+        # gdb test dep) and ollama (arm-only mlx-c runtime dep).
+        formulae = index(
+            on_intel(formula("gnu-apl", build_deps=["llvm@21"]), build_dependencies=[]),
+            on_intel(formula("ddd"), test_dependencies=["gdb"]),
+            on_intel(formula("ollama", deps=["mlx-c"]), dependencies=[]),
+            formula("llvm@21"),
+            formula("gdb"),
+            formula("mlx-c"),
+        )
+        self.assertEqual(expand(["gnu-apl", "ddd", "ollama"], formulae), {"gnu-apl", "ddd", "ollama", "gdb"})
+
     def test_expand_keeps_unknown_names(self):
         formulae = index(formula("a", deps=["go@1.21"]))
         self.assertEqual(expand(["a", "go@1.21"], formulae), {"a", "go@1.21"})
@@ -99,6 +140,14 @@ class BuildOrderTest(unittest.TestCase):
     def test_build_order_puts_test_deps_first(self):
         formulae = index(formula("a", test_deps=["b"]), formula("b"))
         self.assertEqual(build_order({"a", "b"}, formulae), ["b", "a"])
+
+    def test_build_order_uses_intel_dependencies(self):
+        formulae = index(
+            on_intel(formula("a", build_deps=["b"]), build_dependencies=[], test_dependencies=["c"]),
+            formula("b"),
+            formula("c", test_deps=["b"]),
+        )
+        self.assertEqual(build_order({"a", "b", "c"}, formulae), ["b", "c", "a"])
 
     def test_build_order_tolerates_unknown_names(self):
         self.assertEqual(build_order({"go@1.21", "a"}, index(formula("a"))), ["a", "go@1.21"])

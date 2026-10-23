@@ -70,6 +70,12 @@ class NeedsBuildTest(PlanTestCase):
         formulae = {**FORMULAE, "llvm": {**FORMULAE["llvm"], "dependencies": [], "test_dependencies": ["z3"]}}
         self.assertEqual(plan.tap_dependencies("llvm", ["cmake", *ORDER], formulae), ["cmake", "z3"])
 
+    def test_tap_dependencies_use_the_intel_variation(self):
+        intel = {"dependencies": [], "build_dependencies": [], "test_dependencies": ["z3"]}
+        llvm = {**FORMULAE["llvm"], "variations": {"sequoia": intel, "arm64_sequoia": {"dependencies": []}}}
+        formulae = {**FORMULAE, "llvm": llvm}
+        self.assertEqual(plan.tap_dependencies("llvm", ["cmake", *ORDER], formulae), ["z3"])
+
 
 class PlanCliTest(PlanTestCase):
     def test_builds_cli_prints_deps(self):
