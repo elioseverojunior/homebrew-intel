@@ -3,16 +3,31 @@
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+# scripts/tap/closure.py (stdlib-only) owns how brew resolves a core formula's
+# dependency keys on Intel; appended so this directory's modules keep precedence.
+sys.path.append(str(REPO_ROOT / "scripts" / "tap"))
+import closure  # noqa: E402
+
 DATA_DIR = Path(os.environ.get("HOMEBREW_INTEL_DATA", REPO_ROOT / ".cache" / "api"))
 REPORTS_DIR = REPO_ROOT / "reports"
 
 INTEL_MACOS_TAGS = ["tahoe", "sequoia", "sonoma", "ventura", "monterey", "big_sur"]
 CURRENT_INTEL_TAGS = {"tahoe", "sequoia"}
-INTEL_TAG = "sequoia"
+INTEL_TAG = closure.INTEL_VARIATION
 ARM_TAG = "arm64_sequoia"
+
+
+def intel_dependencies(name, formulae, *keys):
+    """A formula.json entry's dependency keys as brew resolves them on Intel Sequoia.
+
+    The top-level lists describe ARM macOS; each key in the Intel variation
+    replaces its top-level list outright.
+    """
+    return closure.dependencies(name, formulae, *keys)
 
 
 def load_json(name):

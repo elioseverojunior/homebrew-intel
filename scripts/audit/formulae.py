@@ -9,6 +9,7 @@ from brew_api import (
     INTEL_MACOS_TAGS,
     INTEL_TAG,
     bottle_files,
+    intel_dependencies,
     load_analytics,
     load_json,
     load_tag_payload,
@@ -28,8 +29,8 @@ def arm_only_names(formulae):
 def dependents_of(roots, formulae):
     """Every formula whose runtime dependency closure reaches one of `roots`."""
     reverse = collections.defaultdict(set)
-    for name, formula in formulae.items():
-        for dependency in formula["dependencies"]:
+    for name in formulae:
+        for dependency in intel_dependencies(name, formulae, "dependencies"):
             reverse[dependency].add(name)
     blocked, pending = set(), list(roots)
     while pending:
@@ -77,8 +78,8 @@ def build_rows():
                 "installs_90d": installs.get(name, 0),
                 "deprecated": formula.get("deprecated"),
                 "desc": formula.get("desc"),
-                "dependencies": formula["dependencies"],
-                "build_dependencies": formula["build_dependencies"],
+                "dependencies": intel_dependencies(name, formulae, "dependencies"),
+                "build_dependencies": intel_dependencies(name, formulae, "build_dependencies"),
             }
         )
     return rows

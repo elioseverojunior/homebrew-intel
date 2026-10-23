@@ -1,5 +1,6 @@
 """Classify Brewfile formulae and casks for Intel macOS Sequoia."""
 
+import brew_api
 from brew_api import INTEL_TAG, load_json, load_tag_payload
 
 INTEL_OLDER_TAGS = ("sonoma", "ventura", "monterey", "big_sur", "catalina")
@@ -27,8 +28,11 @@ def intel_dependencies(name, api):
     """(runtime, build) dependencies as evaluated for Intel Sequoia."""
     raw = api["tags"]["sequoia"]["formulae"].get(name, {}).get("stable_dependencies")
     if raw is None:
-        formula = api["formulas"].get(name, {})
-        return formula.get("dependencies", []), formula.get("build_dependencies", [])
+        formulae = api["formulas"]
+        return (
+            brew_api.intel_dependencies(name, formulae, "dependencies"),
+            brew_api.intel_dependencies(name, formulae, "build_dependencies"),
+        )
     runtime, build = [], []
     for dep in raw:
         if isinstance(dep, str):
