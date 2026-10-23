@@ -1,4 +1,4 @@
-# Generated from Homebrew/homebrew-core@3b7983907359f7548f4fdb121b36a1075623bc6d by scripts/tap/render.py; do not edit.
+# Generated from Homebrew/homebrew-core@1abdb18fb70f59fea5797571e7fd964d2f67049d by scripts/tap/render.py; do not edit.
 # Hand-written changes belong in patches/cmake.patch.
 class Cmake < Formula
   desc "Cross-platform make"
@@ -21,9 +21,9 @@ class Cmake < Formula
 
   # bottle block: written by brew pr-pull
   bottle do
-    root_url "https://github.com/elioseverojunior/homebrew-intel/releases/download/cmake-4.4.4"
-    rebuild 1
-    sha256 cellar: :any_skip_relocation, sequoia: "d1f821206d762cd77c1121441f82c1376474b3f90fe248d0753a3f13d8e68c8a"
+    root_url "https://github.com/homebrew-intel/homebrew-tap/releases/download/cmake-4.4.4"
+    rebuild 2
+    sha256 cellar: :any_skip_relocation, sequoia: "45f18d488a9d15d4e8e0fcb23a3bbfb1f2d4fbfc3b1405087801bd0e40dd4c0f"
   end
 
   uses_from_macos "ncurses"
