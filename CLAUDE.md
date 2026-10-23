@@ -119,11 +119,12 @@ rebuilds `reports/` from a fresh API snapshot plus local git history, taps and
   with `brew bottle --merge --write` and publishes them through a bot pull
   request (not `brew pr-pull`). Only Sequoia bottles are built; they also
   pour on Tahoe.
-- For now the self-hosted runner (label `iMacPro`) runs natively on the
-  owner's host. Safeguards: never `brew test-bot --cleanup`, `brew cleanup` or
-  `brew autoremove`; set `HOMEBREW_NO_AUTO_UPDATE=1` and
-  `HOMEBREW_NO_INSTALL_CLEANUP=1`; one run at a time. A Sequoia VM remains
-  the target.
+- The self-hosted runner `macos-intel-sequoia` (label `sequoia`) runs in
+  the VMware Fusion VM `macos-intel-sequoia-builder` on the owner's iMac Pro,
+  as the VM's own `runner` user, never on the host. Safeguards: never
+  `brew test-bot --cleanup`, `brew cleanup` or `brew autoremove`; set
+  `HOMEBREW_NO_AUTO_UPDATE=1` and `HOMEBREW_NO_INSTALL_CLEANUP=1`; one run at
+  a time.
 - No secret ever reaches the build host: formula code runs there as the
   runner's user and can read any ancestor's environment. Its `build.yml` has
   five jobs:
