@@ -72,6 +72,18 @@ class DeriveVersionsTest(unittest.TestCase):
             self.assertEqual((scratch / relpath).read_text(encoding="utf-8"), f"{relpath} trusted render\n")
         self.assertFalse((self.tap / "Formula/z/z3.rb").exists())
 
+    def test_empty_run_writes_an_empty_map_without_loading_formulae(self):
+        manifest = json.loads((self.out / "manifest.json").read_text(encoding="utf-8"))
+        manifest |= {"built": [], "render_only": [], "failed": [{"name": "lz4", "version": "1.10.0", "log": "lz4.log"}]}
+        self.write(self.out / "manifest.json", json.dumps(manifest))
+        empty = self.root / "empty-renders"
+        empty.mkdir()
+        self.renders = empty
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(self.versions.read_text(encoding="utf-8")), {})
+        self.assertEqual([argv for argv in self.fake.argvs() if argv[1] in ("info", "trust")], [])
+
     def test_wrong_formula_or_brew_failure_fails(self):
         self.fake.rules.clear()
         self.fake.respond("brew", "--repository", stdout=f"{self.brew}\n")

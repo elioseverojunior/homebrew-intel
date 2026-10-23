@@ -106,6 +106,37 @@ class VerifyArtifactTest(ArtifactTestCase):
         self.assertNotEqual(verify_artifact.write_renders(self.out, self.tap, self.core, self.pins(), again), [])
         self.assertEqual(list(again.iterdir()), [])
 
+    def empty_run(self) -> None:
+        """Like a run whose only formula failed: nothing built, nothing to publish."""
+        for relpath in ("Formula", "bottles"):
+            for path in sorted((self.out / relpath).rglob("*"), reverse=True):
+                path.rmdir() if path.is_dir() else path.unlink()
+        self.manifest |= {
+            "built": [],
+            "render_only": [],
+            "failed": [{"name": "lz4", "version": "1.10.0", "log": "lz4.log"}],
+        }
+
+    def test_write_renders_creates_an_empty_directory_for_an_empty_run(self):
+        self.empty_run()
+        self.save()
+        renders = self.directory() / "renders"
+        self.assertEqual(verify_artifact.write_renders(self.out, self.tap, self.core, self.pins(), renders), [])
+        self.assertEqual(list(renders.iterdir()), [])
+        self.assertEqual(self.problems({}), [])
+
+    def test_refused_artifact_creates_no_renders_directory(self):
+        self.edit("Formula/z/z3.rb", "  def install\n", '  def install\n    system "curl", "evil"\n')
+        self.save()
+        renders = self.directory() / "renders"
+        self.assertNotEqual(verify_artifact.write_renders(self.out, self.tap, self.core, self.pins(), renders), [])
+        self.assertFalse(renders.exists())
+
+    def test_empty_versions_do_not_excuse_published_formulae(self):
+        self.assert_refused_with({}, "z3: no derived version")
+        self.manifest["built"], self.manifest["render_only"] = [], []
+        self.assert_refused("Formula/z/z3.rb is not listed in the manifest")
+
     def assert_refused_with(self, versions: dict[str, str], fragment: str) -> None:
         found = self.problems(versions)
         self.assertTrue(any(fragment in problem for problem in found), found)

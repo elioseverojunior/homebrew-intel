@@ -144,6 +144,20 @@ class PublishRunTest(PublishRunCase):
         self.assertEqual(self.calls("gh", "pr"), [])
         self.assertIn("no commits in this run", result.stderr)
 
+    def test_all_failed_opens_issues_only(self):
+        self.manifest["built"], self.manifest["render_only"] = [], []
+        self.fail_build("lz4", "1.10.0")
+        self.save()
+        result = self.run_script()
+        self.assertEqual(result.returncode, 1)
+        (issue,) = self.calls("gh", "issue", "create")
+        self.assertIn("build failed: lz4 1.10.0", issue["argv"])
+        self.assertEqual(self.commits(), [])
+        self.assertEqual(self.calls("gh", "pr"), [])
+        self.assertEqual(self.calls("gh", "release"), [])
+        self.assertEqual(self.calls("gh", "api", f"repos/{REPO}/check-runs"), [])
+        self.assertEqual(self.calls("gh", "api", f"repos/{REPO}/git/refs"), [])
+
     def test_refused_commit_keeps_the_chain_on_the_last_own_commit(self):
         self.fake.fail("gh", "release", "view", "lz4-1.10.0")
         self.fake.fail("gh", "release", "create", "lz4-1.10.0")

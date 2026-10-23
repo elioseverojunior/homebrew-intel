@@ -194,10 +194,16 @@ def problems(out: Path, tap: Path, repo: Path, pins: Pins, versions: Mapping[str
 
 
 def write_renders(out: Path, tap: Path, repo: Path, pins: Pins, renders_dir: Path) -> list[str]:
-    """Run the formulae-only check; only when it passes, write each trusted render."""
+    """Run the formulae-only check; only when it passes, write each trusted render.
+
+    The directory is created even when there is nothing to render (every build
+    failed), so derive-versions.sh can tell a verified empty set from a check
+    that never passed.
+    """
     found, renders = _check(out, tap, repo, pins, None)
     if found:
         return found
+    renders_dir.mkdir(parents=True, exist_ok=True)
     for relpath, text in renders.items():
         (renders_dir / relpath).parent.mkdir(parents=True, exist_ok=True)
         (renders_dir / relpath).write_text(text, encoding="utf-8")
