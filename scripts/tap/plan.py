@@ -7,7 +7,7 @@ from collections.abc import Set as AbstractSet
 from pathlib import Path
 
 from bottles import api_core_commit, pkg_version
-from closure import build_order, dependencies, expand
+from closure import BUILD_KEYS, build_order, dependencies, expand
 from core_source import formula_relpath
 from enabled import ConfigError, load_enabled
 from render import TAP_ROOT, load_formulae
@@ -19,7 +19,7 @@ class PlanError(RuntimeError):
 
 
 def tap_dependencies(name: str, order: list[str], formulae: Mapping[str, Mapping]) -> list[str]:
-    return [d for d in dependencies(name, formulae, "dependencies", "build_dependencies") if d in order]
+    return [d for d in dependencies(name, formulae, *BUILD_KEYS) if d in order]
 
 
 def is_bottled(tap_dir: Path, name: str) -> bool:

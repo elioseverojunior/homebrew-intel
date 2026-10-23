@@ -66,6 +66,10 @@ class NeedsBuildTest(PlanTestCase):
         self.assertEqual(plan.tap_dependencies("llvm", ORDER, FORMULAE), ["z3"])
         self.assertEqual(plan.tap_dependencies("z3", ORDER, FORMULAE), [])
 
+    def test_tap_dependencies_include_build_and_test_dependencies(self):
+        formulae = {**FORMULAE, "llvm": {**FORMULAE["llvm"], "dependencies": [], "test_dependencies": ["z3"]}}
+        self.assertEqual(plan.tap_dependencies("llvm", ["cmake", *ORDER], formulae), ["cmake", "z3"])
+
 
 class PlanCliTest(PlanTestCase):
     def test_builds_cli_prints_deps(self):

@@ -3,11 +3,12 @@ import unittest
 from closure import BOTTLED_INTEL_TAGS, build_order, expand, needs_intel_bottle
 
 
-def formula(name, deps=(), build_deps=(), tags=()):
+def formula(name, deps=(), build_deps=(), tags=(), test_deps=()):
     return {
         "name": name,
         "dependencies": list(deps),
         "build_dependencies": list(build_deps),
+        "test_dependencies": list(test_deps),
         "bottle": {"stable": {"files": {tag: {} for tag in tags}}} if tags else {},
     }
 
@@ -45,9 +46,36 @@ class ExpandTest(unittest.TestCase):
         )
         self.assertEqual(expand(["a"], formulae), {"a", "c"})
 
-    def test_expand_ignores_build_deps(self):
-        formulae = index(formula("a", build_deps=["cmake"]), formula("cmake"))
-        self.assertEqual(expand(["a"], formulae), {"a"})
+    def test_expand_adds_unbottled_build_deps(self):
+        formulae = index(formula("lz4", build_deps=["cmake"]), formula("cmake"))
+        self.assertEqual(expand(["lz4"], formulae), {"lz4", "cmake"})
+
+    def test_expand_skips_bottled_build_deps_but_walks_their_runtime_deps(self):
+        formulae = index(
+            formula("a", build_deps=["b"]),
+            formula("b", deps=["c"], build_deps=["d"], tags={"sonoma"}),
+            formula("c"),
+            formula("d"),
+        )
+        self.assertEqual(expand(["a"], formulae), {"a", "c"})
+
+    def test_expand_follows_build_deps_of_added_formulae(self):
+        formulae = index(
+            formula("a", deps=["b"]),
+            formula("b", build_deps=["c"]),
+            formula("c", build_deps=["d"]),
+            formula("d"),
+        )
+        self.assertEqual(expand(["a"], formulae), {"a", "b", "c", "d"})
+
+    def test_expand_adds_unbottled_test_deps_of_the_closure_only(self):
+        formulae = index(
+            formula("a", deps=["b"], test_deps=["t"]),
+            formula("b", test_deps=["u"], tags={"sonoma"}),
+            formula("t"),
+            formula("u"),
+        )
+        self.assertEqual(expand(["a"], formulae), {"a", "t"})
 
     def test_expand_keeps_unknown_names(self):
         formulae = index(formula("a", deps=["go@1.21"]))
@@ -66,6 +94,10 @@ class BuildOrderTest(unittest.TestCase):
 
     def test_build_order_uses_build_deps_inside_set(self):
         formulae = index(formula("a", build_deps=["b", "outside"]), formula("b"))
+        self.assertEqual(build_order({"a", "b"}, formulae), ["b", "a"])
+
+    def test_build_order_puts_test_deps_first(self):
+        formulae = index(formula("a", test_deps=["b"]), formula("b"))
         self.assertEqual(build_order({"a", "b"}, formulae), ["b", "a"])
 
     def test_build_order_tolerates_unknown_names(self):

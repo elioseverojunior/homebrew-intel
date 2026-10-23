@@ -4,6 +4,10 @@ from collections.abc import Iterable, Mapping
 from collections.abc import Set as AbstractSet
 
 BOTTLED_INTEL_TAGS = frozenset({"all", "sequoia", "sonoma", "ventura", "monterey", "big_sur"})
+# What building, testing and bottling a formula on the Intel host installs:
+# brew pours its runtime dependencies and builds none of its build or test
+# dependencies itself (`brew test` refuses to run without the test ones).
+BUILD_KEYS = ("dependencies", "build_dependencies", "test_dependencies")
 
 
 def needs_intel_bottle(formula: Mapping) -> bool:
@@ -17,6 +21,13 @@ def dependencies(name: str, formulae: Mapping[str, Mapping], *keys: str) -> list
 
 
 def expand(enabled: Iterable[str], formulae: Mapping[str, Mapping]) -> set[str]:
+    """The enabled names plus every dependency they need that has no Intel bottle.
+
+    Runtime dependencies are followed through bottled formulae too, since a
+    poured keg still needs its own. Build and test dependencies are followed
+    only for formulae in the result: the tap builds and tests those, while a
+    bottled formula is poured, never built.
+    """
     result = set(enabled)
     visited: set[str] = set()
     pending = sorted(result)
@@ -25,7 +36,8 @@ def expand(enabled: Iterable[str], formulae: Mapping[str, Mapping]) -> set[str]:
         if name in visited:
             continue
         visited.add(name)
-        for dependency in dependencies(name, formulae, "dependencies"):
+        keys = BUILD_KEYS if name in result else ("dependencies",)
+        for dependency in dependencies(name, formulae, *keys):
             known = dependency in formulae
             if known and needs_intel_bottle(formulae[dependency]):
                 result.add(dependency)
@@ -35,10 +47,7 @@ def expand(enabled: Iterable[str], formulae: Mapping[str, Mapping]) -> set[str]:
 
 
 def build_order(names: AbstractSet[str], formulae: Mapping[str, Mapping]) -> list[str]:
-    prerequisites = {
-        name: {d for d in dependencies(name, formulae, "dependencies", "build_dependencies") if d in names}
-        for name in names
-    }
+    prerequisites = {name: {d for d in dependencies(name, formulae, *BUILD_KEYS) if d in names} for name in names}
     order: list[str] = []
     remaining = dict(prerequisites)
     while remaining:
