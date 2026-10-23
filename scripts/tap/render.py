@@ -7,7 +7,7 @@ from collections.abc import Set as AbstractSet
 from pathlib import Path
 
 from bottles import bottle_release_tag, pkg_version, release_tag
-from closure import build_order, expand
+from closure import DependencyCycleError, build_order, expand
 from core_source import CoreSourceError, core_repo, formula_relpath, head_commit, read_formula
 from enabled import ConfigError, Entry, load_enabled
 from patching import PatchError, apply_patch, make_patch
@@ -151,7 +151,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
         run(args)
-    except (*RENDER_ERRORS, RenderError, OSError) as error:
+    except (*RENDER_ERRORS, RenderError, DependencyCycleError, OSError) as error:
         print(f"render: {error}", file=sys.stderr)
         return 1
     return 0

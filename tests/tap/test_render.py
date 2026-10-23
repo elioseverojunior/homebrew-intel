@@ -95,6 +95,16 @@ class RenderTest(RenderTestCase):
         self.assertEqual((code, stdout), (0, "z3\nllvm\n"))
         self.assertFalse((self.tap / "Formula").exists())
 
+    def test_dependency_cycle_fails_with_one_line(self):
+        self.enable('[formula.llvm]\nkind = "generated"\n')
+        api = {**API, "z3": {**API["z3"], "test_dependencies": ["llvm"]}}
+        for argv in ((), ("--print-order",)):
+            code, stdout, stderr = self.run_render(*argv, api=api)
+            self.assertEqual((code, stdout), (1, ""), argv)
+            self.assertEqual(stderr.count("\n"), 1, stderr)
+            self.assertTrue(stderr.startswith("render: dependency cycle llvm -> z3 -> llvm"), stderr)
+        self.assertFalse((self.tap / "Formula").exists())
+
     def test_warns_about_files_outside_set(self):
         self.enable('[formula.lz4]\nkind = "generated"\n')
         self.write(self.tap / "Formula/s/stale.rb", "old\n")

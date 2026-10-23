@@ -96,6 +96,14 @@ class PlanCliTest(PlanTestCase):
         self.assertEqual((code, out), (1, ""))
         self.assertIn("nope", err)
 
+    def test_dependency_cycle_fails_with_one_line(self):
+        self.enable('[formula.llvm]\nkind = "generated"\n')
+        formulae = {**FORMULAE, "z3": {**FORMULAE["z3"], "test_dependencies": ["llvm"]}}
+        code, out, err = self.run_plan("builds", formulae=formulae)
+        self.assertEqual((code, out), (1, ""))
+        self.assertEqual(err.count("\n"), 1, err)
+        self.assertTrue(err.startswith("plan: dependency cycle llvm -> z3 -> llvm"), err)
+
     def test_commit_cli_prints_sha(self):
         self.assertEqual(self.run_plan("commit"), (0, f"{SHA}\n", ""))
 

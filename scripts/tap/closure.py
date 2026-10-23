@@ -15,6 +15,18 @@ INTEL_VARIATION = "sequoia"
 BUILD_KEYS = ("dependencies", "build_dependencies", "test_dependencies")
 
 
+class DependencyCycleError(ValueError):
+    """The closure's dependencies loop, so no build order exists."""
+
+    def __init__(self, cycle: list[str]) -> None:
+        self.cycle = cycle
+        path = " -> ".join(cycle)
+        super().__init__(
+            f"dependency cycle {path} (Intel runtime, build and test dependencies); "
+            "break it with a patch that drops one of these edges, or disable what pulls them in"
+        )
+
+
 def needs_intel_bottle(formula: Mapping) -> bool:
     files = ((formula.get("bottle") or {}).get("stable") or {}).get("files", {})
     return BOTTLED_INTEL_TAGS.isdisjoint(files)
@@ -59,10 +71,23 @@ def build_order(names: AbstractSet[str], formulae: Mapping[str, Mapping]) -> lis
     while remaining:
         ready = sorted(name for name, needed in remaining.items() if not needed)
         if not ready:
-            msg = f"dependency cycle among: {', '.join(sorted(remaining))}"
-            raise ValueError(msg)
+            raise DependencyCycleError(find_cycle(remaining))
         order.append(ready[0])
         del remaining[ready[0]]
         for needed in remaining.values():
             needed.discard(ready[0])
     return order
+
+
+def find_cycle(prerequisites: Mapping[str, AbstractSet[str]]) -> list[str]:
+    """One cycle, closed on its first name, where every name still needs another.
+
+    Following any prerequisite from any name must revisit a name; the walk is
+    sorted so the reported cycle is stable.
+    """
+    path: list[str] = []
+    name = min(prerequisites)
+    while name not in path:
+        path.append(name)
+        name = min(prerequisites[name])
+    return [*path[path.index(name) :], name]

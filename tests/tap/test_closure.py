@@ -1,6 +1,14 @@
 import unittest
 
-from closure import BOTTLED_INTEL_TAGS, INTEL_VARIATION, build_order, dependencies, expand, needs_intel_bottle
+from closure import (
+    BOTTLED_INTEL_TAGS,
+    INTEL_VARIATION,
+    DependencyCycleError,
+    build_order,
+    dependencies,
+    expand,
+    needs_intel_bottle,
+)
 
 
 def formula(name, deps=(), build_deps=(), tags=(), test_deps=()):
@@ -152,10 +160,19 @@ class BuildOrderTest(unittest.TestCase):
     def test_build_order_tolerates_unknown_names(self):
         self.assertEqual(build_order({"go@1.21", "a"}, index(formula("a"))), ["a", "go@1.21"])
 
-    def test_build_order_cycle_raises(self):
-        formulae = index(formula("a", deps=["b"]), formula("b", deps=["a"]), formula("c"))
-        with self.assertRaisesRegex(ValueError, "a, b"):
-            build_order({"a", "b", "c"}, formulae)
+    def test_build_order_cycle_names_only_its_members(self):
+        formulae = index(formula("m", deps=["n"]), formula("n", deps=["m"]), formula("early", deps=["m"]), formula("z"))
+        with self.assertRaises(DependencyCycleError) as caught:
+            build_order({"m", "n", "early", "z"}, formulae)
+        self.assertEqual(caught.exception.cycle, ["m", "n", "m"])
+        self.assertIn("dependency cycle m -> n -> m", str(caught.exception))
+        self.assertNotIn("early", str(caught.exception))
+
+    def test_build_order_cycle_through_a_test_dependency(self):
+        formulae = index(formula("x", test_deps=["y"]), formula("y", deps=["z"]), formula("z", build_deps=["x"]))
+        with self.assertRaises(DependencyCycleError) as caught:
+            build_order({"x", "y", "z"}, formulae)
+        self.assertEqual(caught.exception.cycle, ["x", "y", "z", "x"])
 
 
 if __name__ == "__main__":
