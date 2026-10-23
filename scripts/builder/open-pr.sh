@@ -27,7 +27,7 @@ readonly GATE_CHECK="verify-bot-pr"
 # GitHub Actions' App id: the required check must come from a workflow run, so
 # no other App or commit status can satisfy it.
 readonly GATE_INTEGRATION_ID=15368
-readonly BOT_AUTHOR="app/elios-automator"
+readonly BOT_AUTHOR="app/homebrew-intel"
 readonly OWNER="homebrew-intel"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly script_dir

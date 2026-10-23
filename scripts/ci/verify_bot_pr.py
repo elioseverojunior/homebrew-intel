@@ -31,11 +31,11 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import NamedTuple
 
-BOT_LOGIN = "elios-automator[bot]"
-APP_SLUG = "elios-automator"
+BOT_LOGIN = "homebrew-intel[bot]"
+APP_SLUG = "homebrew-intel"
 # The App's numeric id never changes or moves to another App; the slug is kept
 # as a second condition.
-APP_ID = 4348245
+APP_ID = 5443354
 CHECK_NAME = "bottle-builder"
 # GitHub lists at most this many commits / files of a pull request.
 COMMIT_LIMIT = 250

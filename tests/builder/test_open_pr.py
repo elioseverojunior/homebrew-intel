@@ -28,7 +28,7 @@ def gate_rule(*checks: dict) -> dict:
 GATE_RULE = gate_rule(GATE)
 
 
-def pull(number: int, owner: str = "homebrew-intel", author: str = "app/elios-automator") -> dict:
+def pull(number: int, owner: str = "homebrew-intel", author: str = "app/homebrew-intel") -> dict:
     return {"number": number, "headRepositoryOwner": {"login": owner}, "author": {"login": author, "is_bot": True}}
 
 
@@ -123,7 +123,7 @@ class OpenPullRequestTest(PublishTest):
     def test_no_auto_merge_without_the_verify_bot_pr_rule(self):
         other = gate_rule({"context": "drift", "integration_id": 15368})
         any_source = gate_rule({"context": "verify-bot-pr"})
-        other_app = gate_rule({"context": "verify-bot-pr", "integration_id": 4348245})
+        other_app = gate_rule({"context": "verify-bot-pr", "integration_id": 5443354})
         for rules in ([], [other], [{"type": "pull_request"}], [any_source], [other_app]):
             with self.subTest(rules=rules):
                 self.fake.rules.clear()

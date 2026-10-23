@@ -108,12 +108,12 @@ rebuilds `reports/` from a fresh API snapshot plus local git history, taps and
   check run or is the head of another open same-repository `bottle/*` pull
   request: checks belong to a commit, so a skip there would turn the gate
   green for the bot's pull request too, and such a pull request fails. A
-  pull request by `elios-automator[bot]` passes only
+  pull request by `homebrew-intel[bot]` passes only
   when it comes from a same-repository `bottle/<date>-<n>` branch into
   `main`, only touches `Formula/`, its commit and file counts match the
   event (below the API listing limits), its commits are verified bot commits,
   and its head carries a successful `bottle-builder` check run from the
-  `elios-automator` App whose `head_sha` and `external_id` are that head.
+  `homebrew-intel` App whose `head_sha` and `external_id` are that head.
   That check run is the trust anchor; any later push to the branch removes
   it and auto-merge waits.
 - The only GitHub-hosted Intel runner is `macos-15-intel`. It is the last
