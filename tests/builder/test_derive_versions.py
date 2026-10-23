@@ -7,7 +7,7 @@ from pathlib import Path
 from tests.builder.fakes import FakeBin
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "builder" / "derive-versions.sh"
-TAP = "elioseverojunior/intel"
+TAP = "homebrew-intel/tap"
 
 
 def info(name: str, version: str, revision: int = 0) -> str:
@@ -63,7 +63,7 @@ class DeriveVersionsTest(unittest.TestCase):
         self.assertEqual(self.run_script().returncode, 0)
         trusted = [argv for argv in self.fake.argvs() if argv[:2] == ["brew", "trust"]]
         self.assertEqual(trusted, [["brew", "trust", "--formula", f"{TAP}/z3", f"{TAP}/llvm", f"{TAP}/xz"]])
-        link = self.brew / "Library/Taps/elioseverojunior/homebrew-intel"
+        link = self.brew / "Library/Taps/homebrew-intel/homebrew-tap"
         self.assertTrue(link.is_symlink())
         scratch = link.resolve()
         self.assertNotEqual(scratch, self.tap)
@@ -101,7 +101,7 @@ class DeriveVersionsTest(unittest.TestCase):
         self.assertEqual(self.fake.argvs(), [])
 
     def test_refuses_an_existing_tap_directory(self):
-        (self.brew / "Library/Taps/elioseverojunior/homebrew-intel").mkdir(parents=True)
+        (self.brew / "Library/Taps/homebrew-intel/homebrew-tap").mkdir(parents=True)
         result = self.run_script()
         self.assertEqual(result.returncode, 1)
         self.assertIn("already exists", result.stderr)

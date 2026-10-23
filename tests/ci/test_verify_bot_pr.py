@@ -9,12 +9,12 @@ from pathlib import Path
 import verify_bot_pr
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "ci" / "verify_bot_pr.py"
-REPO = "elioseverojunior/homebrew-intel"
+REPO = "homebrew-intel/homebrew-tap"
 HEAD_SHA = "5646363e5d4fc69def7c6ccad23a44a34e9e12a7"
 # Trimmed from the live bot pull request #1 (gh api repos/.../pulls/1, /commits, /files).
 PULL_REQUEST = {
     "number": 1,
-    "user": {"login": "elios-automator[bot]", "type": "Bot"},
+    "user": {"login": "homebrew-intel[bot]", "type": "Bot"},
     "head": {"ref": "bottle/2026-10-22-2", "sha": HEAD_SHA, "repo": {"full_name": REPO}},
     "base": {"ref": "main", "repo": {"full_name": REPO}},
     "commits": 1,
@@ -22,7 +22,7 @@ PULL_REQUEST = {
 }
 COMMIT = {
     "sha": HEAD_SHA,
-    "author": {"login": "elios-automator[bot]", "type": "Bot"},
+    "author": {"login": "homebrew-intel[bot]", "type": "Bot"},
     "committer": {"login": "web-flow", "type": "User"},
     "commit": {
         "message": "lz4: add 1.10.0 sequoia bottle",
@@ -37,13 +37,13 @@ CHECK_RUN = {
     "external_id": HEAD_SHA,
     "status": "completed",
     "conclusion": "success",
-    "app": {"id": 4348245, "slug": "elios-automator"},
+    "app": {"id": 5443354, "slug": "homebrew-intel"},
 }
 HUMAN = PULL_REQUEST | {"number": 2, "user": {"login": "elioseverojunior", "type": "User"}}
 HUMAN |= {"head": {"ref": "feature", "sha": "a" * 40, "repo": {"full_name": REPO}}}
 # A human pull request whose head is the bot's head commit.
 TWIN = HUMAN | {"head": HUMAN["head"] | {"sha": HEAD_SHA}}
-NO_CHECK = "head 5646363e5d4f has no successful bottle-builder check run from elios-automator"
+NO_CHECK = "head 5646363e5d4f has no successful bottle-builder check run from homebrew-intel"
 
 
 class ProblemsTest(unittest.TestCase):
@@ -70,8 +70,8 @@ class ProblemsTest(unittest.TestCase):
         self.assertIn("author type is 'User', not Bot", self.problems())
 
     def test_fork_fails(self):
-        self.pull_request["head"]["repo"] = {"full_name": "someone/homebrew-intel"}
-        self.assertIn(f"head repository 'someone/homebrew-intel' is not {REPO}", self.problems())
+        self.pull_request["head"]["repo"] = {"full_name": "someone/homebrew-tap"}
+        self.assertIn(f"head repository 'someone/homebrew-tap' is not {REPO}", self.problems())
 
     def test_deleted_head_repository_fails(self):
         self.pull_request["head"]["repo"] = None
@@ -90,19 +90,19 @@ class ProblemsTest(unittest.TestCase):
     def test_commit_by_another_author_fails(self):
         self.commits.append(copy.deepcopy(COMMIT) | {"sha": "a" * 40, "author": {"login": "elioseverojunior"}})
         self.pull_request["commits"] = 2
-        expected = "commit aaaaaaaaaaaa author is 'elioseverojunior', not elios-automator[bot]"
+        expected = "commit aaaaaaaaaaaa author is 'elioseverojunior', not homebrew-intel[bot]"
         self.assertEqual(self.problems(), [expected])
 
     def test_commit_without_linked_users_fails(self):
         self.commits[0]["author"] = None
         self.commits[0]["committer"] = None
         problems = self.problems()
-        self.assertIn("commit 5646363e5d4f author is 'None', not elios-automator[bot]", problems)
+        self.assertIn("commit 5646363e5d4f author is 'None', not homebrew-intel[bot]", problems)
         self.assertIn("commit 5646363e5d4f committer is 'None', not web-flow", problems)
 
     def test_commit_with_another_committer_fails(self):
-        self.commits[0]["committer"] = {"login": "elios-automator[bot]"}
-        self.assertIn("commit 5646363e5d4f committer is 'elios-automator[bot]', not web-flow", self.problems())
+        self.commits[0]["committer"] = {"login": "homebrew-intel[bot]"}
+        self.assertIn("commit 5646363e5d4f committer is 'homebrew-intel[bot]', not web-flow", self.problems())
 
     def test_forged_commit_without_the_check_run_fails(self):
         # Verified, bot-authored, committed by web-flow: forgeable through the REST git API.
@@ -114,11 +114,11 @@ class ProblemsTest(unittest.TestCase):
         self.assertEqual(self.problems(), [NO_CHECK])
 
     def test_check_run_from_an_app_reusing_the_slug_fails(self):
-        self.check_runs[0]["app"] = {"id": 1, "slug": "elios-automator"}
+        self.check_runs[0]["app"] = {"id": 1, "slug": "homebrew-intel"}
         self.assertEqual(self.problems(), [NO_CHECK])
 
     def test_check_run_needs_the_slug_too(self):
-        self.check_runs[0]["app"] = {"id": 4348245, "slug": "renamed"}
+        self.check_runs[0]["app"] = {"id": 5443354, "slug": "renamed"}
         self.assertEqual(self.problems(), [NO_CHECK])
 
     def test_check_run_on_another_commit_fails(self):
@@ -133,7 +133,7 @@ class ProblemsTest(unittest.TestCase):
         # The builder attested an earlier head; the pull request has moved on since.
         self.pull_request["head"]["sha"] = "d" * 40
         self.assertEqual(
-            self.problems(), ["head dddddddddddd has no successful bottle-builder check run from elios-automator"]
+            self.problems(), ["head dddddddddddd has no successful bottle-builder check run from homebrew-intel"]
         )
 
     def test_base_other_than_main_fails(self):
@@ -202,7 +202,7 @@ class ImpersonationTest(unittest.TestCase):
         )
 
     def test_same_head_as_a_non_bottle_or_fork_pull_request_passes(self):
-        fork = PULL_REQUEST | {"head": PULL_REQUEST["head"] | {"repo": {"full_name": "someone/homebrew-intel"}}}
+        fork = PULL_REQUEST | {"head": PULL_REQUEST["head"] | {"repo": {"full_name": "someone/homebrew-tap"}}}
         feature = PULL_REQUEST | {"head": PULL_REQUEST["head"] | {"ref": "feature"}}
         self.assertEqual(self.problems([], [fork, feature, TWIN]), [])
 

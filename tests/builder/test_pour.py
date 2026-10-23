@@ -9,7 +9,7 @@ from pathlib import Path
 from tests.builder.run_harness import RunTest
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "builder" / "pour.sh"
-TAP_LZ4 = "elioseverojunior/intel/lz4"
+TAP_LZ4 = "homebrew-intel/tap/lz4"
 
 
 class PourTest(RunTest):

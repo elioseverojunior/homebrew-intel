@@ -8,8 +8,8 @@ from pathlib import Path
 from tests.builder.fakes import FakeBin, fake_oid
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "builder" / "publish.sh"
-REPO = "elioseverojunior/homebrew-intel"
-PRIVATE_REPO = "elioseverojunior/homebrew-intel-private"
+REPO = "homebrew-intel/homebrew-tap"
+PRIVATE_REPO = "homebrew-intel/builder"
 BRANCH = "bottle/2026-10-22-42"
 CORE = "c" * 40
 TARBALL = "lz4-1.10.0.sequoia.bottle.tar.gz"

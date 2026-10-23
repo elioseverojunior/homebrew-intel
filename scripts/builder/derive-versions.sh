@@ -10,7 +10,7 @@ set -Eeuo pipefail
 # with a strictly parsed bottle block; only that text, made from core, is ever
 # loaded. brew loads formulae only from a tap, so this builds a scratch tap
 # (the checkout's formulae plus the renders), links it as
-# elioseverojunior/homebrew-intel, trusts just the artifact's formulae and
+# homebrew-intel/homebrew-tap, trusts just the artifact's formulae and
 # reads versions.stable and revision with `brew info`. The artifact only
 # supplies the names (built, then render-only; verify_artifact.py checks a
 # render-only formula's kept bottle block against its version). Writes
@@ -18,7 +18,7 @@ set -Eeuo pipefail
 # environment, since it loads formula code.
 # Env: TAP_DIR (the checkout; default this script's repository).
 
-readonly TAP="elioseverojunior/intel"
+readonly TAP="homebrew-intel/tap"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly script_dir
 TAP_DIR="${TAP_DIR:-$(cd "${script_dir}/../.." && pwd -P)}"
@@ -49,7 +49,7 @@ refuse_tokens() {
 
 link_tap() {
   local link
-  link="$(brew --repository)/Library/Taps/elioseverojunior/homebrew-intel"
+  link="$(brew --repository)/Library/Taps/homebrew-intel/homebrew-tap"
   if [[ -e "${link}" && ! -L "${link}" ]]
   then
     log "refusing: ${link} already exists and is not this job's link"

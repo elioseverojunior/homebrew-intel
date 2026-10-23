@@ -22,7 +22,7 @@ class Lz4 < Formula
     sha256 cellar: :any, sequoia: "e052e8b48414243e3c99069453af52436b36f232bef34bee8aab1da2b714f188"
   end
 
-  depends_on "elioseverojunior/intel/cmake" => :build
+  depends_on "homebrew-intel/tap/cmake" => :build
 
   deny_network_access!
 

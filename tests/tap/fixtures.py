@@ -12,7 +12,7 @@ from unittest import mock
 import render
 
 BOTTLE = '  bottle do\n    sha256 cellar: :any, arm64_sequoia: "aaa"\n  end\n'
-LZ4_ROOT_URL = "https://github.com/elioseverojunior/homebrew-intel/releases/download/lz4-1.10.0"
+LZ4_ROOT_URL = "https://github.com/homebrew-intel/homebrew-tap/releases/download/lz4-1.10.0"
 TAP_BOTTLE = f'  bottle do\n    root_url "{LZ4_ROOT_URL}"\n    sha256 cellar: :any, sequoia: "bbb"\n  end\n'
 
 

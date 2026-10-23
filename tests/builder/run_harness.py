@@ -30,7 +30,7 @@ from pathlib import Path
 root = Path({root!r})
 config = json.loads((root / "stubs.json").read_text(encoding="utf-8"))
 script, args = os.path.basename(sys.argv[0]), sys.argv[1:]
-link = root / "Taps" / "homebrew-intel"
+link = root / "Taps" / "homebrew-tap"
 
 
 def formula_relpath(name):
@@ -114,7 +114,7 @@ class RunTest(unittest.TestCase):
         self.original = self.root / "original"
         self.original.mkdir()
         (self.root / "Taps").mkdir()
-        self.link = self.root / "Taps" / "homebrew-intel"
+        self.link = self.root / "Taps" / "homebrew-tap"
         self.link.symlink_to(self.original)
         self.configure(plan="")
 

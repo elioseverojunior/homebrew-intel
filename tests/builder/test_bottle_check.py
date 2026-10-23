@@ -6,7 +6,7 @@ from pathlib import Path
 
 import bottle_check
 
-ROOT_URL = "https://github.com/elioseverojunior/homebrew-intel/releases/download/lz4-1.10.0"
+ROOT_URL = "https://github.com/homebrew-intel/homebrew-tap/releases/download/lz4-1.10.0"
 CONTENT = b"bottle bytes"
 SHA = hashlib.sha256(CONTENT).hexdigest()
 TARBALL = "lz4-1.10.0.sequoia.bottle.tar.gz"
@@ -19,7 +19,7 @@ def block(*middle: str) -> str:
 
 GOOD_BLOCK = block(f'root_url "{ROOT_URL}"', f'sha256 cellar: :any, sequoia: "{SHA}"')
 DOCUMENT = {
-    "elioseverojunior/intel/lz4": {
+    "homebrew-intel/tap/lz4": {
         "formula": {"name": "lz4", "pkg_version": "1.10.0"},
         "bottle": {
             "root_url": ROOT_URL,
@@ -45,7 +45,7 @@ class BottleCheckTest(unittest.TestCase):
         return bottle_check.problems(text, self.document, self.bottle)
 
     def tag(self) -> dict:
-        return self.document["elioseverojunior/intel/lz4"]["bottle"]["tags"]["sequoia"]
+        return self.document["homebrew-intel/tap/lz4"]["bottle"]["tags"]["sequoia"]
 
     def test_good_bottle_passes(self):
         self.assertEqual(self.problems(), [])
@@ -60,7 +60,7 @@ class BottleCheckTest(unittest.TestCase):
         self.tarball.rename(rebuilt)
         self.bottle = self.bottle._replace(tarball=rebuilt)
         self.tag()["filename"] = rebuilt.name
-        self.document["elioseverojunior/intel/lz4"]["bottle"]["rebuild"] = 1
+        self.document["homebrew-intel/tap/lz4"]["bottle"]["rebuild"] = 1
         text = block(f'root_url "{ROOT_URL}"', "rebuild 1", f'sha256 cellar: :any, sequoia: "{SHA}"')
         self.assertEqual(self.problems(text), [])
         self.assertTrue(any("rebuild" in problem or "tarball" in problem for problem in self.problems()))
@@ -91,11 +91,11 @@ class BottleCheckTest(unittest.TestCase):
         self.assertEqual(self.problems(), [])
 
     def test_json_shape_is_checked(self):
-        self.document["elioseverojunior/intel/lz4"]["bottle"]["tags"]["sonoma"] = self.tag()
+        self.document["homebrew-intel/tap/lz4"]["bottle"]["tags"]["sonoma"] = self.tag()
         self.assertNotEqual(self.problems(), [])
-        self.document = {"elioseverojunior/intel/zstd": DOCUMENT["elioseverojunior/intel/lz4"]}
+        self.document = {"homebrew-intel/tap/zstd": DOCUMENT["homebrew-intel/tap/lz4"]}
         self.assertNotEqual(self.problems(), [])
-        self.document = {"elioseverojunior/intel/lz4": {"bottle": None}}
+        self.document = {"homebrew-intel/tap/lz4": {"bottle": None}}
         self.assertIn("malformed bottle JSON", " ".join(self.problems()))
 
     def test_file_names_follow_brew(self):

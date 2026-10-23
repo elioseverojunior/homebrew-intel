@@ -19,8 +19,8 @@ set -Eeuo pipefail
 # per failed build (issue_body.py). Exits non-zero when anything failed or was
 # not published.
 
-readonly REPO="elioseverojunior/homebrew-intel"
-readonly PRIVATE_REPO="elioseverojunior/homebrew-intel-private"
+readonly REPO="homebrew-intel/homebrew-tap"
+readonly PRIVATE_REPO="homebrew-intel/builder"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly script_dir
 TAP_DIR="${TAP_DIR:-$(cd "${script_dir}/../.." && pwd -P)}"

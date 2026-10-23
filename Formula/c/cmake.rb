@@ -19,13 +19,12 @@ class Cmake < Formula
     regex(/href=.*?cmake[._-]v?(\d+(?:\.\d+)+)\.t/i)
   end
 
+  # bottle block: written by brew pr-pull
   bottle do
     root_url "https://github.com/elioseverojunior/homebrew-intel/releases/download/cmake-4.4.4"
     rebuild 1
     sha256 cellar: :any_skip_relocation, sequoia: "d1f821206d762cd77c1121441f82c1376474b3f90fe248d0753a3f13d8e68c8a"
   end
-
-  # bottle block: written by brew pr-pull
 
   uses_from_macos "ncurses"
 

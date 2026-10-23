@@ -21,7 +21,7 @@ from verify_artifact import Pins
 
 from tests.tap.fixtures import CORE_FORMULAE, TAP_BOTTLE, git
 
-TAP = "elioseverojunior/intel"
+TAP = "homebrew-intel/tap"
 
 
 def bottle_block(name: str, version: str, sha: str, rebuild: int = 0) -> str:

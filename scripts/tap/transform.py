@@ -3,7 +3,7 @@
 import re
 from collections.abc import Set as AbstractSet
 
-TAP = "elioseverojunior/intel"
+TAP = "homebrew-intel/tap"
 BOTTLE_MARKER = "  # bottle block: written by brew pr-pull"
 
 _BOTTLE_START = "  bottle do"

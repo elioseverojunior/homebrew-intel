@@ -21,14 +21,14 @@ set -Eeuo pipefail
 # missing ruleset or a failure to enable auto-merge only warns; the owner then
 # merges by hand.
 
-readonly REPO="elioseverojunior/homebrew-intel"
+readonly REPO="homebrew-intel/homebrew-tap"
 readonly CHECK_NAME="bottle-builder"
 readonly GATE_CHECK="verify-bot-pr"
 # GitHub Actions' App id: the required check must come from a workflow run, so
 # no other App or commit status can satisfy it.
 readonly GATE_INTEGRATION_ID=15368
-readonly BOT_AUTHOR="app/elios-automator"
-readonly OWNER="elioseverojunior"
+readonly BOT_AUTHOR="app/homebrew-intel"
+readonly OWNER="homebrew-intel"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly script_dir
 # shellcheck source=scripts/builder/gh-lookup.sh

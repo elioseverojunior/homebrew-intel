@@ -5,7 +5,7 @@ code in this repository.
 
 ## Purpose
 
-A Homebrew tap (`brew tap elioseverojunior/intel`) that keeps macOS Intel
+A Homebrew tap (`brew tap homebrew-intel/tap`) that keeps macOS Intel
 (x86_64) usable after homebrew-core dropped it. Intel macOS is Tier 3 in core:
 no new Intel bottles, and Homebrew plans to stop running on Intel in or after
 September 2027 (see `$(brew --repo)/docs/Support-Tiers.md`).
@@ -45,10 +45,10 @@ Design: `docs/superpowers/specs/2026-10-21-intel-bottles-design.md`.
   prints a notice. Commit the patch and the render. A patch may only remove
   Intel gates, revive a removed formula, or fix an Intel build failure.
 - Same name as core. Users must install fully qualified
-  (`brew install elioseverojunior/intel/<name>`), or core's version wins. Say
+  (`brew install homebrew-intel/tap/<name>`), or core's version wins. Say
   so in README and caveats; never rename to dodge the collision.
 - Dependencies that are also in this tap are rewritten to
-  `elioseverojunior/intel/<dep>` by the render; the rest stay plain names.
+  `homebrew-intel/tap/<dep>` by the render; the rest stay plain names.
 - Casks are out of scope.
 
 ## Verification
@@ -63,19 +63,19 @@ mise run render
 mise run drift
 mise run lint
 mise run test
-brew style elioseverojunior/intel/<name>
-brew audit --strict --online --tap=elioseverojunior/intel
-brew install --build-from-source elioseverojunior/intel/<name>
-brew test elioseverojunior/intel/<name>
+brew style homebrew-intel/tap/<name>
+brew audit --strict --online --tap=homebrew-intel/tap
+brew install --build-from-source homebrew-intel/tap/<name>
+brew test homebrew-intel/tap/<name>
 ```
 
 - `mise run drift` must pass.
 - The local machine is Intel (`/usr/local` prefix). Bottles must be built
   under `/usr/local`, or relocation breaks them.
 - The tap is symlinked to this checkout, so `brew style
-  elioseverojunior/intel` also scans the gitignored `actions-runner/` and
+  homebrew-intel/tap` also scans the gitignored `actions-runner/` and
   reports hundreds of unrelated offenses. Locally, run `brew style` on
-  specific formulae (`brew style elioseverojunior/intel/<name>`); CI
+  specific formulae (`brew style homebrew-intel/tap/<name>`); CI
   checkouts do not have that directory.
 - `brew audit` errors inherited from core are accepted. For example, lz4
   reports an HTTP-mirror error that core's lz4 also has.
@@ -108,19 +108,19 @@ rebuilds `reports/` from a fresh API snapshot plus local git history, taps and
   check run or is the head of another open same-repository `bottle/*` pull
   request: checks belong to a commit, so a skip there would turn the gate
   green for the bot's pull request too, and such a pull request fails. A
-  pull request by `elios-automator[bot]` passes only
+  pull request by `homebrew-intel[bot]` passes only
   when it comes from a same-repository `bottle/<date>-<n>` branch into
   `main`, only touches `Formula/`, its commit and file counts match the
   event (below the API listing limits), its commits are verified bot commits,
   and its head carries a successful `bottle-builder` check run from the
-  `elios-automator` App whose `head_sha` and `external_id` are that head.
+  `homebrew-intel` App whose `head_sha` and `external_id` are that head.
   That check run is the trust anchor; any later push to the branch removes
   it and auto-merge waits.
 - The only GitHub-hosted Intel runner is `macos-15-intel`. It is the last
   Intel image and is expected to retire around August 2027. Don't add hosted
   labels such as `macos-13` (retired) or `macos-26-intel` (doesn't exist).
 - Bottles are built by the private builder
-  `elioseverojunior/homebrew-intel-private`, which writes the bottle blocks
+  `homebrew-intel/builder`, which writes the bottle blocks
   with `brew bottle --merge --write` and publishes them through a bot pull
   request (not `brew pr-pull`). Only Sequoia bottles are built; they also
   pour on Tahoe.
@@ -188,7 +188,7 @@ rebuilds `reports/` from a fresh API snapshot plus local git history, taps and
   and fails. Re-running the same workflow run fails at its first commit
   because its branch already exists; dispatch a new run instead.
 - Dispatch a build with `gh workflow run build.yml -R
-  elioseverojunior/homebrew-intel-private -f formulae=<name>` (add
+  homebrew-intel/builder -f formulae=<name>` (add
   `-f dry-run=true` to only print the plan).
 - Never cancel a run while it builds or pours: the old keg is uninstalled
   first and restored on failure. If a restore cannot finish, the keg's full
