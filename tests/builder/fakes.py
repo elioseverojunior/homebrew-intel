@@ -33,7 +33,7 @@ NOT_FOUND_BODY = (
     '{{"message":"Not Found","documentation_url":"https://docs.github.com/rest/git/refs#get-a-reference",'
     '"status":"404"}}'
 )
-REPO_API = "repos/elioseverojunior/homebrew-intel/"
+REPO_API = "repos/homebrew-intel/homebrew-tap/"
 
 LOG, CONFIG = {log!r}, {config!r}
 tool, args = os.path.basename(sys.argv[0]), sys.argv[1:]
@@ -92,7 +92,7 @@ if call[:2] == ["brew", "bottle"] and "--json" in args and "--merge" not in args
     local, final = f"{{name}}--{{version}}.sequoia.bottle.tar.gz", f"{{name}}-{{version}}.sequoia.bottle.tar.gz"
     Path(local).write_bytes(b"bottle")
     tag = {{"filename": quote(final, safe=""), "local_filename": local}}
-    document = {{f"elioseverojunior/intel/{{name}}": {{"bottle": {{"tags": {{"sequoia": tag}}}}}}}}
+    document = {{f"homebrew-intel/tap/{{name}}": {{"bottle": {{"tags": {{"sequoia": tag}}}}}}}}
     Path(f"{{name}}--{{version}}.sequoia.bottle.json").write_text(json.dumps(document), encoding="utf-8")
 rule = next((r for r in config["rules"] if call[: len(r["argv"])] == r["argv"]), None)
 if rule is None and config.get("serve_git") and tool == "gh":

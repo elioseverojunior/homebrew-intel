@@ -17,7 +17,7 @@ set -Eeuo pipefail
 # Prints the oid of the commit it created on stdout; publish.sh chains the next
 # commit on it and hands the last one to open-pr.sh.
 
-readonly REPO="elioseverojunior/homebrew-intel"
+readonly REPO="homebrew-intel/homebrew-tap"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly script_dir
 # shellcheck source=scripts/builder/gh-lookup.sh

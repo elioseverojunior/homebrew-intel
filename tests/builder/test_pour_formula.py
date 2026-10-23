@@ -7,7 +7,7 @@ from pathlib import Path
 from tests.builder.fakes import FakeBin
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "builder" / "pour-formula.sh"
-TAP = "elioseverojunior/intel"
+TAP = "homebrew-intel/tap"
 INFO = ["brew", "info", "--json=v2", "--installed", "lz4"]
 UNINSTALL = ["brew", "uninstall", "--ignore-dependencies", "lz4"]
 POUR = ["brew", "install", "--force-bottle", f"{TAP}/lz4"]

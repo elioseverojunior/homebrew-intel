@@ -13,7 +13,7 @@
 # The embedded Python never starts a line with `if`: brew style's shfmt
 # wrapper would take it for a shell `if` and reindent the snippet.
 
-readonly TAP="elioseverojunior/intel"
+readonly TAP="homebrew-intel/tap"
 swap_name=""
 restore_name=""
 keg_touched=no

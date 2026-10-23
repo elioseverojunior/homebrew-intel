@@ -9,7 +9,7 @@ from pathlib import Path
 import verify_bot_pr
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "ci" / "verify_bot_pr.py"
-REPO = "elioseverojunior/homebrew-intel"
+REPO = "homebrew-intel/homebrew-tap"
 HEAD_SHA = "5646363e5d4fc69def7c6ccad23a44a34e9e12a7"
 # Trimmed from the live bot pull request #1 (gh api repos/.../pulls/1, /commits, /files).
 PULL_REQUEST = {
@@ -70,8 +70,8 @@ class ProblemsTest(unittest.TestCase):
         self.assertIn("author type is 'User', not Bot", self.problems())
 
     def test_fork_fails(self):
-        self.pull_request["head"]["repo"] = {"full_name": "someone/homebrew-intel"}
-        self.assertIn(f"head repository 'someone/homebrew-intel' is not {REPO}", self.problems())
+        self.pull_request["head"]["repo"] = {"full_name": "someone/homebrew-tap"}
+        self.assertIn(f"head repository 'someone/homebrew-tap' is not {REPO}", self.problems())
 
     def test_deleted_head_repository_fails(self):
         self.pull_request["head"]["repo"] = None
@@ -202,7 +202,7 @@ class ImpersonationTest(unittest.TestCase):
         )
 
     def test_same_head_as_a_non_bottle_or_fork_pull_request_passes(self):
-        fork = PULL_REQUEST | {"head": PULL_REQUEST["head"] | {"repo": {"full_name": "someone/homebrew-intel"}}}
+        fork = PULL_REQUEST | {"head": PULL_REQUEST["head"] | {"repo": {"full_name": "someone/homebrew-tap"}}}
         feature = PULL_REQUEST | {"head": PULL_REQUEST["head"] | {"ref": "feature"}}
         self.assertEqual(self.problems([], [fork, feature, TWIN]), [])
 

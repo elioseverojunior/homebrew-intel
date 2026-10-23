@@ -5,7 +5,7 @@ import re
 from collections import Counter
 from collections.abc import Iterable, Mapping
 
-ROOT_URL_BASE = "https://github.com/elioseverojunior/homebrew-intel/releases/download"
+ROOT_URL_BASE = "https://github.com/homebrew-intel/homebrew-tap/releases/download"
 
 _ROOT_URL_LINE = re.compile(r'^\s*root_url\s+"([^"]+)"', re.MULTILINE)
 _FULL_SHA = re.compile(r"[0-9a-f]{40}")

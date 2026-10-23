@@ -73,7 +73,7 @@ jobs:
           changed="$(git diff --name-only "origin/${BASE_REF}...HEAD" -- Formula | sed 's@.*/@@; s@\.rb$@@')"
           scripts/audit/fetch-api.sh
           order="$(python3 scripts/tap/render.py --print-order)"
-          brew trust elioseverojunior/intel
+          brew trust homebrew-intel/tap
           found=no
           while IFS= read -r name <&3; do
             grep -qxF "$name" <<< "$changed" || continue
@@ -82,18 +82,18 @@ jobs:
             # The image ships some formulae from homebrew/core (cmake, for
             # one); brew refuses a same-named tap formula next to them.
             receipt="$(brew --prefix)/opt/${name}/INSTALL_RECEIPT.json"
-            if [ -f "$receipt" ] && ! grep -qF '"tap":"elioseverojunior/intel"' <(tr -d ' \n' < "$receipt"); then
+            if [ -f "$receipt" ] && ! grep -qF '"tap":"homebrew-intel/tap"' <(tr -d ' \n' < "$receipt"); then
               brew uninstall --ignore-dependencies "$name"
             fi
             # brew test refuses to run without test dependencies, and neither
             # install nor reinstall adds them unasked.
-            brew install --only-dependencies --include-test "elioseverojunior/intel/${name}"
+            brew install --only-dependencies --include-test "homebrew-intel/tap/${name}"
             if [ -d "$(brew --cellar)/${name}" ]; then
-              brew reinstall --force-bottle "elioseverojunior/intel/${name}"
+              brew reinstall --force-bottle "homebrew-intel/tap/${name}"
             else
-              brew install --force-bottle "elioseverojunior/intel/${name}"
+              brew install --force-bottle "homebrew-intel/tap/${name}"
             fi
-            brew test "elioseverojunior/intel/${name}"
+            brew test "homebrew-intel/tap/${name}"
           done 3<<< "$order"
           if [ "$found" = no ]; then
             echo "no bottled formulae changed"

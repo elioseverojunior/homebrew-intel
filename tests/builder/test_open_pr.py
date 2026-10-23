@@ -28,7 +28,7 @@ def gate_rule(*checks: dict) -> dict:
 GATE_RULE = gate_rule(GATE)
 
 
-def pull(number: int, owner: str = "elioseverojunior", author: str = "app/elios-automator") -> dict:
+def pull(number: int, owner: str = "homebrew-intel", author: str = "app/elios-automator") -> dict:
     return {"number": number, "headRepositoryOwner": {"login": owner}, "author": {"login": author, "is_bot": True}}
 
 

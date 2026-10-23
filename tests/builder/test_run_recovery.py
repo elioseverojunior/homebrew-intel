@@ -2,7 +2,7 @@ import unittest
 
 from tests.builder.run_harness import RunTest, git
 
-TAP_LZ4 = "elioseverojunior/intel/lz4"
+TAP_LZ4 = "homebrew-intel/tap/lz4"
 
 
 class PendingRestoreTest(RunTest):

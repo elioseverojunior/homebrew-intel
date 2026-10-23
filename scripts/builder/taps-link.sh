@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Sourced helper shared by run.sh and pour.sh: points the Taps symlink brew
-# resolves elioseverojunior/intel through at the job's checkout (TAP_DIR) and
+# resolves homebrew-intel/tap through at the job's checkout (TAP_DIR) and
 # restores it on every exit. The caller sources keg.sh first and defines log().
 # Test seam: TAPS_LINK (the Taps symlink).
 # Must stay compatible with macOS /bin/bash 3.2.
@@ -30,9 +30,9 @@ restore_taps_link() {
   exit "${status}"
 }
 
-# Sets taps_link, the symlink brew resolves elioseverojunior/intel through.
+# Sets taps_link, the symlink brew resolves homebrew-intel/tap through.
 locate_taps_link() {
-  taps_link="${TAPS_LINK:-$(brew --repository)/Library/Taps/elioseverojunior/homebrew-intel}"
+  taps_link="${TAPS_LINK:-$(brew --repository)/Library/Taps/homebrew-intel/homebrew-tap}"
 }
 
 # True when the link already points at the checkout and no interrupted job
@@ -65,7 +65,7 @@ record_link_target() {
   write_atomically "${saved_target}" "${link_target}"
 }
 
-# brew resolves elioseverojunior/intel through this symlink, so it must point
+# brew resolves homebrew-intel/tap through this symlink, so it must point
 # at the checkout being built. A real directory there is the owner's tap clone;
 # refuse rather than replace it.
 swap_taps_link() {

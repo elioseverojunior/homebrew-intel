@@ -10,7 +10,7 @@ runners are available, and falling back to a self-hosted one would expose the
 same risk.
 
 Bottles for formulae that core no longer builds for Intel come from the
-private builder repository, `elioseverojunior/homebrew-intel-private`. Its
+private builder repository, `homebrew-intel/builder`. Its
 self-hosted runner, `macos-intel-sequoia` (labels `self-hosted`, `macOS`,
 `X64`, `sequoia`) in a macOS Sequoia VM, runs
 `scripts/builder/run.sh --build-only` from a checkout of this tap with no
