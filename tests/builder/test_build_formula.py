@@ -15,7 +15,7 @@ ROOT_URL = "https://github.com/elioseverojunior/homebrew-intel/releases/download
 ASSET = "lz4-1.10.0.sequoia.bottle.tar.gz"
 BOTTLE_JSON = "lz4--1.10.0.sequoia.bottle.json"
 INFO = ["brew", "info", "--json=v2", "--installed", "lz4"]
-BUILD = ["brew", "install", "--build-bottle", f"{TAP}/lz4"]
+BUILD = ["brew", "install", "--build-bottle", "--include-test", f"{TAP}/lz4"]
 UNINSTALL = ["brew", "uninstall", "--ignore-dependencies", "lz4"]
 RESTORE_CORE = ["brew", "install", "lz4"]
 RESTORE_TAP = ["brew", "install", f"{TAP}/lz4"]

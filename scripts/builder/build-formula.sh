@@ -41,9 +41,12 @@ validate_arguments() {
   fi
 }
 
+# A clean host has no test dependencies, and `brew test` refuses to run
+# without them; --include-test installs them (the closure gives those core
+# lacks an Intel bottle a tap one, built earlier in the plan).
 build_and_test() {
   keg_touched=yes
-  brew install --build-bottle "${TAP}/${name}"
+  brew install --build-bottle --include-test "${TAP}/${name}"
   brew test "${TAP}/${name}"
 }
 
